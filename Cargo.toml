@@ -1,0 +1,18 @@
+[package]
+name = "sf2synth"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "A real-time SF2 MIDI synthesizer and MIDI file sequencer in pure Rust, tuned for faithful piano reproduction."
+license = "MIT OR Apache-2.0"
+authors = ["Albos Inc."]
+repository = "https://github.com/albos-inc/sf2synth"
+readme = "README.md"
+keywords = ["sf2", "synthesizer", "midi", "audio", "piano"]
+categories = ["multimedia::audio"]
+exclude = ["/.github", "/testdata"]
+
+[dependencies]
+
+[profile.test]
+opt-level = 2
