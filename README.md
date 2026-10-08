@@ -30,6 +30,9 @@ tuned for faithful piano reproduction.
 
 [sf2studio](https://github.com/albos-inc/sf2studio) is a desktop app built
 on sf2synth for making, tuning and comparing SF2 instruments.
+[examples/player](examples/player) is a sample MIDI file player for iOS,
+Android, Windows and macOS, with
+[ready-to-run builds](https://github.com/albos-inc/sf2synth/releases?q=player).
 
 ## Usage
 

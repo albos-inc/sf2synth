@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The icon's gradient (as in icon/make-icons.swift). -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android">
+    <gradient
+        android:angle="315"
+        android:endColor="#9E38D9"
+        android:startColor="#594DF2" />
+</shape>

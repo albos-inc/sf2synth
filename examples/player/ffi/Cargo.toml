@@ -1,0 +1,21 @@
+[package]
+name = "sf2player-ffi"
+description = "The sf2player core for Swift (a C interface) and Kotlin (JNI)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[lib]
+name = "sf2player_ffi"
+# A static library for the Apple apps, a shared one for Android.
+crate-type = ["staticlib", "cdylib"]
+
+[dependencies]
+serde_json = "1"
+sf2player = { path = "../core" }
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21"

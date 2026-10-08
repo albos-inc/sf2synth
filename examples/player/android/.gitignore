@@ -1,0 +1,11 @@
+.gradle/
+build/
+local.properties
+.idea/
+*.iml
+.kotlin/
+# Built from ../ffi by the buildRust task.
+app/src/main/jniLibs/
+# Release signing (see README).
+keystore.properties
+*.jks
