@@ -18,6 +18,9 @@ tuned for faithful piano reproduction.
   whatever the buffer size. Seeking restores programs and controllers;
   speed change, looping and track muting; a sink API for external MIDI
   output with frame offsets.
+- **SF2 writer.** Build presets, instruments, zones and samples and write
+  them as an SF2 file (`sf2synth::writer`); read any file's zones and sample
+  points back.
 - **No audio I/O.** It renders into your buffers; play them with AAudio,
   Core Audio, WASAPI, [cpal](https://crates.io/crates/cpal) or anything else.
 

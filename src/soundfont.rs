@@ -58,6 +58,11 @@ pub struct Preset {
 }
 
 impl Preset {
+    /// The preset's zones, each with its global zone merged in.
+    pub fn zones(&self) -> &[Zone] {
+        &self.zones
+    }
+
     pub fn name(&self) -> &str {
         &self.name
     }
@@ -77,6 +82,11 @@ pub struct Instrument {
 }
 
 impl Instrument {
+    /// The instrument's zones, each with its global zone merged in.
+    pub fn zones(&self) -> &[Zone] {
+        &self.zones
+    }
+
     pub fn name(&self) -> &str {
         &self.name
     }
@@ -107,22 +117,54 @@ impl SampleHeader {
     }
 }
 
-/// A zone with its global zone already merged in.
+/// A zone of a preset or an instrument, with its global zone already
+/// merged in.
 #[derive(Clone, Debug)]
-pub(crate) struct Zone {
-    pub key_lo: u8,
-    pub key_hi: u8,
-    pub vel_lo: u8,
-    pub vel_hi: u8,
-    pub generators: GeneratorSet,
-    pub modulators: Vec<Modulator>,
+pub struct Zone {
+    pub(crate) key_lo: u8,
+    pub(crate) key_hi: u8,
+    pub(crate) vel_lo: u8,
+    pub(crate) vel_hi: u8,
+    pub(crate) generators: GeneratorSet,
+    pub(crate) modulators: Vec<Modulator>,
     /// Instrument index (preset zones) or sample index (instrument zones).
-    pub link: usize,
+    pub(crate) link: usize,
 }
 
 impl Zone {
-    pub fn contains(&self, key: u8, velocity: u8) -> bool {
+    pub(crate) fn contains(&self, key: u8, velocity: u8) -> bool {
         (self.key_lo..=self.key_hi).contains(&key) && (self.vel_lo..=self.vel_hi).contains(&velocity)
+    }
+
+    /// Lowest and highest key.
+    pub fn key_range(&self) -> (u8, u8) {
+        (self.key_lo, self.key_hi)
+    }
+
+    /// Lowest and highest velocity.
+    pub fn velocity_range(&self) -> (u8, u8) {
+        (self.vel_lo, self.vel_hi)
+    }
+
+    /// The value the zone gives a generator ([`crate::generator`]), if any.
+    pub fn generator(&self, generator: u16) -> Option<i16> {
+        self.generators.get(generator)
+    }
+
+    /// Every generator the zone sets (key and velocity ranges and the
+    /// instrument / sample link excluded).
+    pub fn generators(&self) -> impl Iterator<Item = (u16, i16)> + '_ {
+        (0..crate::generator::COUNT as u16).filter_map(|g| self.generators.get(g).map(|v| (g, v)))
+    }
+
+    pub fn modulators(&self) -> &[Modulator] {
+        &self.modulators
+    }
+
+    /// The instrument (preset zones) or sample (instrument zones) played,
+    /// as an index into [`SoundFont::instruments`] or [`SoundFont::samples`].
+    pub fn link(&self) -> usize {
+        self.link
     }
 }
 
@@ -202,6 +244,17 @@ impl SoundFont {
 
     pub fn samples(&self) -> &[SampleHeader] {
         &self.samples
+    }
+
+    /// Number of sample points in the file's sample data.
+    pub fn sample_point_count(&self) -> usize {
+        self.data.len
+    }
+
+    /// Sample points `range` (indices into the whole sample data, as
+    /// [`SampleHeader::start`] etc. count them) as -1…1.
+    pub fn sample_points(&self, range: std::ops::Range<usize>) -> Vec<f32> {
+        range.map(|i| self.data.get(i)).collect()
     }
 
     /// The index of the preset `(bank, program)`, if the file has it.

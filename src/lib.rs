@@ -49,12 +49,13 @@ mod sequencer;
 mod soundfont;
 mod synth;
 mod voice;
+pub mod writer;
 
 pub use effects::{ChorusSettings, ReverbSettings};
 pub use error::{Error, Result};
 pub use midi_file::{MidiEvent, MidiFile, TempoChange};
 pub use modulator::Modulator;
 pub use sequencer::Sequencer;
-pub use soundfont::{Instrument, Preset, SampleHeader, SharedBytes, SoundFont, SoundFontInfo};
+pub use soundfont::{Instrument, Preset, SampleHeader, SharedBytes, SoundFont, SoundFontInfo, Zone};
 pub use synth::{CHANNEL_COUNT, Synthesizer, SynthesizerSettings};
 pub use voice::Interpolation;
