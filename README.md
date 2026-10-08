@@ -24,6 +24,9 @@ tuned for faithful piano reproduction.
 - **No audio I/O.** It renders into your buffers; play them with AAudio,
   Core Audio, WASAPI, [cpal](https://crates.io/crates/cpal) or anything else.
 
+[sf2studio](https://github.com/albos-inc/sf2studio) is a desktop app built
+on sf2synth for making, tuning and comparing SF2 instruments.
+
 ## Usage
 
 ```toml
