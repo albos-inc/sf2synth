@@ -186,6 +186,14 @@ fn clamp16(value: f64) -> i16 {
 
 /// Translates DLS connections to SF2 generators and modulators.
 fn translate(connections: &[Connection], generators: &mut GeneratorSet, modulators: &mut Vec<Modulator>) {
+    // DLS has no velocity → filter connection by default; cancel SF2's.
+    modulators.push(Modulator {
+        source: controller::NOTE_ON_VELOCITY | source::NEGATIVE,
+        destination: g::INITIAL_FILTER_FC,
+        amount: 0,
+        amount_source: 0,
+        transform: 0,
+    });
     // DLS's LFO defaults to 5 Hz; SF2's to 8.176 Hz.
     let five_hz = -851;
     generators.set(g::FREQ_VIB_LFO, five_hz);
