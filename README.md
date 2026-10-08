@@ -12,6 +12,10 @@ tuned for faithful piano reproduction.
 - **SoundFont 2.04.** Every generator, preset/instrument layering, global
   zones, the default modulators and the file's own modulators, 24-bit
   samples (sm24), exclusive classes, loop modes.
+- **DLS too.** DLS level 1 and 2 files (such as the General MIDI set built
+  into macOS) load as the same presets and play the same way: regions,
+  wave samples and loops, and articulation (envelopes, LFOs, filter,
+  velocity and key scaling) translated to SF2 parameters.
 - **Piano details.** Sustain and sostenuto pedals, re-striking a key releases
   its previous strike, 4-point cubic interpolation, click-free gain ramps.
 - **Sample-accurate sequencer.** MIDI events land on their exact frame,

@@ -34,10 +34,20 @@ impl std::fmt::Debug for SoundFont {
     }
 }
 
+/// The kind of file a [`SoundFont`] was read from.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FileFormat {
+    #[default]
+    Sf2,
+    /// Downloadable Sounds (levels 1 and 2), converted on loading.
+    Dls,
+}
+
 /// The INFO chunk.
 #[derive(Clone, Debug, Default)]
 pub struct SoundFontInfo {
-    /// SF2 version (major, minor), e.g. (2, 1).
+    pub format: FileFormat,
+    /// File version (major, minor), e.g. (2, 1) for SF2 2.01.
     pub version: (u16, u16),
     pub name: String,
     pub date: String,
@@ -51,9 +61,9 @@ pub struct SoundFontInfo {
 /// A preset (bank, program).
 #[derive(Clone, Debug)]
 pub struct Preset {
-    name: String,
-    bank: u16,
-    program: u16,
+    pub(crate) name: String,
+    pub(crate) bank: u16,
+    pub(crate) program: u16,
     pub(crate) zones: Vec<Zone>,
 }
 
@@ -77,7 +87,7 @@ impl Preset {
 /// An instrument.
 #[derive(Clone, Debug)]
 pub struct Instrument {
-    name: String,
+    pub(crate) name: String,
     pub(crate) zones: Vec<Zone>,
 }
 
@@ -214,8 +224,27 @@ impl SoundFont {
 
     /// Parses an SF2 file from shared bytes, e.g. a memory map
     /// (`Arc::new(mmap)`), without copying its sample data.
+    ///
+    /// DLS files are read too (their sample data is then copied).
     pub fn from_shared(bytes: SharedBytes) -> Result<SoundFont> {
-        let parsed = parse(bytes.as_ref().as_ref())?;
+        let file: &[u8] = bytes.as_ref().as_ref();
+        if file.len() >= 12 && &file[8..12] == b"DLS " {
+            let converted = crate::dls::parse(file)?;
+            let len = converted.points.len() / 2;
+            let mut preset_index = HashMap::new();
+            for (i, preset) in converted.presets.iter().enumerate() {
+                preset_index.entry((preset.bank, preset.program)).or_insert(i);
+            }
+            return Ok(SoundFont {
+                info: converted.info,
+                presets: converted.presets,
+                instruments: converted.instruments,
+                samples: converted.samples,
+                data: SampleData { bytes: Arc::new(converted.points), smpl: 0, sm24: None, len },
+                preset_index,
+            });
+        }
+        let parsed = parse(file)?;
         let mut preset_index = HashMap::new();
         for (i, preset) in parsed.presets.iter().enumerate() {
             preset_index.entry((preset.bank, preset.program)).or_insert(i);

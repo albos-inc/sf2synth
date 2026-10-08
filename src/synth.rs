@@ -263,7 +263,12 @@ impl Synthesizer {
                     sample,
                     sample_count: font.data.len,
                     default_modulators: &self.default_modulators,
-                    attenuation_scale: self.attenuation_scale,
+                    // DLS attenuations are exact centibels, not E-mu's.
+                    attenuation_scale: if font.info().format == crate::FileFormat::Dls {
+                        1.0
+                    } else {
+                        self.attenuation_scale
+                    },
                     sample_rate: self.sample_rate,
                     channel: &self.channels[channel],
                 };

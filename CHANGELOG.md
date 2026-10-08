@@ -14,3 +14,4 @@ First version.
 - Sample-accurate sequencer with seeking, speed, looping, track muting and
   an external-MIDI sink.
 - Read access to zones and sample points, and an SF2 writer (`writer`).
+- DLS level 1 and 2 files load as SF2 structures (`SoundFontInfo::format`).
