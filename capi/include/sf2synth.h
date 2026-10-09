@@ -142,6 +142,16 @@ void sf2synth_set_master_gain(Sf2Synth *synth, float gain);
 void sf2synth_set_interpolation(Sf2Synth *synth, int32_t interpolation);
 void sf2synth_set_reverb_enabled(Sf2Synth *synth, bool enabled);
 void sf2synth_set_chorus_enabled(Sf2Synth *synth, bool enabled);
+// The output limiter (on by default): keeps the mix below full scale
+// (−0.45 dBFS) without clipping, turning down only the passages that would
+// go over. It delays the mix by sf2synth_latency frames (1 ms); the effect
+// sends are neither limited nor delayed.
+void sf2synth_set_limiter(Sf2Synth *synth, bool enabled);
+// Frames the mix comes out late by (the limiter's look-ahead when it's on).
+uint32_t sf2synth_latency(const Sf2Synth *synth);
+// The limiter's latency at `sample_rate`, in frames.
+uint32_t sf2synth_limiter_latency(uint32_t sample_rate);
+
 // Makes a channel (0…15) play drum kits (bank 128) or melodic presets, until
 // the next reset.
 void sf2synth_set_channel_drum(Sf2Synth *synth, uint8_t channel, bool drum);

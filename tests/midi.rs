@@ -36,6 +36,8 @@ fn synth_with(font: Arc<SoundFont>) -> Synthesizer {
     let mut settings = SynthesizerSettings::new(SAMPLE_RATE);
     settings.reverb.enabled = false;
     settings.chorus.enabled = false;
+    // Exact frames and levels.
+    settings.limiter = false;
     Synthesizer::new(font, &settings).unwrap()
 }
 

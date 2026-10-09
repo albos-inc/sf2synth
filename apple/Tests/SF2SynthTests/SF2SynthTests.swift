@@ -41,6 +41,8 @@ final class SF2SynthTests: XCTestCase {
 
     func testPlaysNotesAndSysEx() throws {
         let synth = try SF2SynthInstrument(soundFont: fontURL())
+        // Exact levels: no limiter.
+        synth.synth.isLimiterEnabled = false
         synth.synth.isReverbEnabled = false
         synth.synth.isChorusEnabled = false
         let (engine, _) = try engine(with: synth)
@@ -110,6 +112,7 @@ final class SF2SynthTests: XCTestCase {
 
     func testParametersSetTheGain() throws {
         let synth = try SF2SynthInstrument(soundFont: fontURL())
+        synth.synth.isLimiterEnabled = false
         synth.synth.isReverbEnabled = false
         synth.synth.isChorusEnabled = false
         let (engine, _) = try engine(with: synth)
@@ -132,6 +135,9 @@ final class SF2SynthTests: XCTestCase {
         first.synth.masterGain = 0.7
         first.synth.isReverbEnabled = false
         first.synth.interpolation = .sinc
+        XCTAssertEqual(first.synth.latency, 47.0 / 48_000, accuracy: 1e-9)
+        first.synth.isLimiterEnabled = false
+        XCTAssertEqual(first.synth.latency, 0)
         let state = first.synth.fullState
 
         let second = try SF2SynthInstrument()
@@ -141,6 +147,7 @@ final class SF2SynthTests: XCTestCase {
         XCTAssertFalse(second.synth.isReverbEnabled)
         XCTAssertTrue(second.synth.isChorusEnabled)
         XCTAssertEqual(second.synth.interpolation, .sinc)
+        XCTAssertFalse(second.synth.isLimiterEnabled)
         XCTAssertEqual(second.synth.soundFontURL?.standardizedFileURL.path, url.standardizedFileURL.path)
         let (engine, _) = try engine(with: second)
         second.startNote(60, withVelocity: 100, onChannel: 0)

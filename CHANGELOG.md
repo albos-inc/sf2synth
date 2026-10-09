@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.1 (2026-10-09)
+
+- **No more clipping:** a look-ahead peak limiter on the output, on by
+  default (`SynthesizerSettings::limiter`, `Synthesizer::set_limiter`). It
+  holds the mix below −0.45 dBFS by turning down only the passages that
+  would go over (ramping down 1 ms ahead of a peak, back up over about
+  150 ms); quieter output passes unchanged. The mix is delayed by 1 ms:
+  `Synthesizer::latency` and `Synthesizer::limiter_latency`. The effect
+  sends are neither limited nor delayed.
+- C: `sf2synth_set_limiter`, `sf2synth_latency`, `sf2synth_limiter_latency`.
+  AUv3: `isLimiterEnabled` (kept in `fullState`), the unit's `latency`
+  reports the look-ahead, and `SF2SynthView` has a Limiter switch.
+
 ## 0.3.0 (2026-10-09)
 
 Faster, cleaner, steadier.

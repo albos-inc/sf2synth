@@ -102,6 +102,26 @@ public final class SF2SynthAudioUnit: AUAudioUnit {
         set { kernel.settings.withLock { $0.interpolation = newValue.rawValue; $0.version &+= 1 } }
     }
 
+    /// The output limiter (on by default): keeps the mix below full scale
+    /// without clipping, turning down only the passages that would go over.
+    /// It delays the mix by 1 ms (``latency``); the reverb send (bus 1) is
+    /// neither limited nor delayed.
+    public var isLimiterEnabled: Bool {
+        get { kernel.settings.withLock { $0.limiter } }
+        set {
+            willChangeValue(forKey: "latency")
+            kernel.settings.withLock { $0.limiter = newValue; $0.version &+= 1 }
+            didChangeValue(forKey: "latency")
+        }
+    }
+
+    /// The limiter's look-ahead, so hosts can compensate for it.
+    override public var latency: TimeInterval {
+        guard isLimiterEnabled else { return 0 }
+        let rate = mainBus.format.sampleRate
+        return Double(sf2synth_limiter_latency(UInt32(rate.rounded()))) / rate
+    }
+
     /// Voices that can sound at once; takes effect at the next
     /// ``loadSoundFont(at:mapped:)`` or when render resources are allocated
     /// without a synth.
@@ -230,6 +250,7 @@ public final class SF2SynthAudioUnit: AUAudioUnit {
                 "chorus": isChorusEnabled,
                 "mapped": isSoundFontMapped,
                 "interpolation": interpolation.rawValue,
+                "limiter": isLimiterEnabled,
             ]
             if let url = soundFontURL {
                 synth["soundFontPath"] = url.path
@@ -244,6 +265,7 @@ public final class SF2SynthAudioUnit: AUAudioUnit {
             if let gain = synth["masterGain"] as? Float { masterGain = gain }
             if let reverb = synth["reverb"] as? Bool { isReverbEnabled = reverb }
             if let chorus = synth["chorus"] as? Bool { isChorusEnabled = chorus }
+            if let limiter = synth["limiter"] as? Bool { isLimiterEnabled = limiter }
             if let value = synth["interpolation"] as? Int32, let interpolation = Interpolation(rawValue: value) {
                 self.interpolation = interpolation
             }
@@ -311,6 +333,7 @@ private final class Kernel {
         var reverb = true
         var chorus = true
         var interpolation = SF2SynthAudioUnit.Interpolation.cubic.rawValue
+        var limiter = true
         var version = 0
     }
 
@@ -553,6 +576,7 @@ private final class Kernel {
         sf2synth_set_reverb_enabled(synth, current.reverb)
         sf2synth_set_chorus_enabled(synth, current.chorus)
         sf2synth_set_interpolation(synth, current.interpolation)
+        sf2synth_set_limiter(synth, current.limiter)
         appliedVersion = current.version
     }
 }

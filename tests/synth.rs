@@ -344,3 +344,43 @@ fn sinc_interpolation_keeps_pitch_and_level() {
         assert!((rms(&sinc) / rms(&cubic) - 1.0).abs() < 0.01, "key {key}: {} vs {}", rms(&sinc), rms(&cubic));
     }
 }
+
+fn chord(limiter: bool, master_gain: f32) -> (Vec<f32>, Synthesizer) {
+    let font = Arc::new(SoundFont::from_bytes(sine_font(&[looping_zone()])).unwrap());
+    let mut settings = SynthesizerSettings::new(SAMPLE_RATE);
+    settings.reverb.enabled = false;
+    settings.chorus.enabled = false;
+    settings.limiter = limiter;
+    settings.master_gain = master_gain;
+    let mut synth = Synthesizer::new(font, &settings).unwrap();
+    for key in [57, 60, 64, 67, 69, 72] {
+        synth.note_on(0, key, 127);
+    }
+    let (mut left, mut right) = (vec![0.0; 44100], vec![0.0; 44100]);
+    synth.render(&mut left, &mut right);
+    left.extend(right);
+    (left, synth)
+}
+
+#[test]
+fn the_limiter_keeps_loud_mixes_below_full_scale() {
+    let (loud, _) = chord(false, 4.0);
+    assert!(peak(&loud) > 2.0, "{}", peak(&loud));
+    let (limited, _) = chord(true, 4.0);
+    assert!(peak(&limited) <= 0.95 * 1.0001, "{}", peak(&limited));
+    assert!(peak(&limited) > 0.9);
+}
+
+#[test]
+fn the_limiter_only_delays_quiet_mixes() {
+    let (direct, synth) = chord(false, 0.05);
+    assert_eq!(synth.latency(), 0);
+    let (limited, synth) = chord(true, 0.05);
+    let latency = synth.latency();
+    assert_eq!(latency, 43); // 1 ms at 44.1 kHz, less the frame itself
+    assert_eq!(Synthesizer::limiter_latency(44100), 43);
+    assert!(peak(&direct) < 0.9);
+    // Left channel: the same samples, `latency` frames later.
+    assert!(limited[..latency].iter().all(|&x| x == 0.0));
+    assert_eq!(&limited[latency..44100], &direct[..44100 - latency]);
+}

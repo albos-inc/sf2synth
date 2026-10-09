@@ -44,6 +44,7 @@ mod dsp;
 mod effects;
 mod error;
 pub mod generator;
+mod limiter;
 mod midi_file;
 pub mod modulator;
 mod sequencer;

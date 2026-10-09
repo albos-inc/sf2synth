@@ -5,6 +5,7 @@ use std::sync::Arc;
 use crate::channel::Channel;
 use crate::effects::{Chorus, ChorusSettings, GsEffects, Reverb, ReverbSettings};
 use crate::error::{Error, Result};
+use crate::limiter::Limiter;
 use crate::modulator::Modulator;
 use crate::soundfont::SoundFont;
 use crate::sysex::{self, SysEx, SysExBuffer};
@@ -33,12 +34,18 @@ pub struct SynthesizerSettings {
     /// can play drums with [`Synthesizer::set_channel_drum`], GS "Use for
     /// Rhythm Part" and XG "Part Mode" messages, and XG and GM2 drum banks.
     pub drum_channel: Option<u8>,
-    /// Gain applied to the mix (1.0 by default). The output isn't limited:
-    /// at 1.0, GS piano pieces played with GeneralUser GS peak between
-    /// about −13 and +3 dBFS. Apple's MIDI synth (`AVAudioUnitSampler`,
-    /// `DLSMusicDevice`) playing the same SoundFont is about 1.6 dB louder;
-    /// 1.2 matches it.
+    /// Gain applied to the mix (1.0 by default). Apple's MIDI synth
+    /// (`AVAudioUnitSampler`, `DLSMusicDevice`) playing the same SoundFont
+    /// is about 1.6 dB louder; 1.2 matches it. Loud passages that would go
+    /// over full scale are held below it by the [`limiter`](Self::limiter).
     pub master_gain: f32,
+    /// Keeps the mix below full scale (−0.45 dBFS) without clipping (on by
+    /// default): a look-ahead peak limiter that turns down only the
+    /// passages that would go over, ramping down 1 ms before a peak and
+    /// back up over about 150 ms. It delays the mix by 1 ms
+    /// ([`Synthesizer::latency`]); the effect sends are neither limited nor
+    /// delayed.
+    pub limiter: bool,
     /// Scale of the `initialAttenuation` generator. E-mu hardware, and most
     /// SF2 files made for it, apply 0.4 (each centibel counts as 0.04 dB);
     /// 1.0 follows the specification literally.
@@ -67,6 +74,7 @@ impl Default for SynthesizerSettings {
             release_same_key: true,
             reverb: ReverbSettings::default(),
             chorus: ChorusSettings::default(),
+            limiter: true,
         }
     }
 }
@@ -138,6 +146,7 @@ pub struct Synthesizer {
     chorus_send: [f32; BLOCK],
     reverb: Reverb,
     chorus: Chorus,
+    limiter: Limiter,
     reverb_settings: ReverbSettings,
     chorus_settings: ChorusSettings,
     // What System Exclusive messages set.
@@ -181,6 +190,7 @@ impl Synthesizer {
             reverb_send: [0.0; BLOCK],
             chorus_send: [0.0; BLOCK],
             reverb: Reverb::new(sample_rate, &settings.reverb),
+            limiter: Limiter::new(sample_rate, settings.limiter),
             chorus: Chorus::new(sample_rate, &settings.chorus),
             reverb_settings: settings.reverb,
             chorus_settings: settings.chorus,
@@ -219,6 +229,7 @@ impl Synthesizer {
         self.sample_rate = sample_rate as f32;
         self.reverb = Reverb::new(self.sample_rate, &self.reverb_settings);
         self.chorus = Chorus::new(self.sample_rate, &self.chorus_settings);
+        self.limiter = Limiter::new(self.sample_rate, self.limiter.enabled);
         self.apply_effect_settings();
         Ok(())
     }
@@ -229,6 +240,33 @@ impl Synthesizer {
 
     pub fn set_master_gain(&mut self, gain: f32) {
         self.master_gain = gain.max(0.0);
+    }
+
+    /// Whether the output limiter is on (see [`SynthesizerSettings::limiter`]).
+    pub fn limiter(&self) -> bool {
+        self.limiter.enabled
+    }
+
+    /// Turns the output limiter on or off. Real-time safe; turning it on or
+    /// off shifts the output by its latency, so do it between songs.
+    pub fn set_limiter(&mut self, enabled: bool) {
+        if enabled && !self.limiter.enabled {
+            self.limiter.clear();
+        }
+        self.limiter.enabled = enabled;
+    }
+
+    /// Frames the mix comes out late by: the limiter's look-ahead (1 ms) when
+    /// it's on, else 0. An event rendered at frame `f` is heard from frame
+    /// `f + latency()`.
+    pub fn latency(&self) -> usize {
+        if self.limiter.enabled { self.limiter.latency() } else { 0 }
+    }
+
+    /// The limiter's latency at `sample_rate`, in frames (what
+    /// [`latency`](Self::latency) is with the limiter on).
+    pub fn limiter_latency(sample_rate: u32) -> usize {
+        Limiter::length(sample_rate as f32) - 1
     }
 
     /// The master volume a System Exclusive message set, 0…1 (1 after a
@@ -612,6 +650,7 @@ impl Synthesizer {
         self.stream = ByteStream::default();
         self.reverb.clear();
         self.chorus.clear();
+        self.limiter.clear();
     }
 
     /// Resets every channel's controllers, pedals and programs and what
@@ -948,9 +987,15 @@ impl Synthesizer {
             let n = (frames - position).min(BLOCK);
             self.render_block(n);
             let gain = self.output_gain();
+            let (mut left, mut right) = ([0.0f32; BLOCK], [0.0f32; BLOCK]);
             for i in 0..n {
-                output[(position + i) * 2] = self.left[i] * gain;
-                output[(position + i) * 2 + 1] = self.right[i] * gain;
+                left[i] = self.left[i] * gain;
+                right[i] = self.right[i] * gain;
+            }
+            self.limiter.process(&mut left[..n], &mut right[..n]);
+            for i in 0..n {
+                output[(position + i) * 2] = left[i];
+                output[(position + i) * 2 + 1] = right[i];
             }
             position += n;
         }
@@ -981,6 +1026,7 @@ impl Synthesizer {
                 *l = dry_l * gain;
                 *r = dry_r * gain;
             }
+            self.limiter.process(&mut left[range.clone()], &mut right[range.clone()]);
             if let Some(reverb) = reverb.as_deref_mut() {
                 for (out, &send) in reverb[range.clone()].iter_mut().zip(&self.reverb_send) {
                     *out = send * gain;

@@ -10,6 +10,8 @@ fn synth() -> Synthesizer {
     let mut settings = SynthesizerSettings::new(SAMPLE_RATE);
     settings.reverb.enabled = false;
     settings.chorus.enabled = false;
+    // Exact frames.
+    settings.limiter = false;
     Synthesizer::new(font, &settings).unwrap()
 }
 

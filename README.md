@@ -54,7 +54,7 @@ Android, Windows and macOS, with
 
 ```toml
 [dependencies]
-sf2synth = { git = "https://github.com/albos-inc/sf2synth", tag = "v0.3.0" }
+sf2synth = { git = "https://github.com/albos-inc/sf2synth", tag = "v0.3.1" }
 ```
 
 ```rust
@@ -81,11 +81,25 @@ sequencer.render(&mut synth, &mut left, &mut right);
 
 ### Volume
 
-`master_gain` is 1.0 by default. The output isn't limited: at 1.0, GS piano
-pieces played with GeneralUser GS peak between about −13 and +3 dBFS. Apple's
-MIDI synth (`AVAudioUnitSampler`, `DLSMusicDevice`) playing the same
-SoundFont is about 1.6 dB louder; a `master_gain` of 1.2 matches it. Songs
-can lower the volume further with a master volume SysEx message.
+`master_gain` is 1.0 by default. Apple's MIDI synth (`AVAudioUnitSampler`,
+`DLSMusicDevice`) playing the same SoundFont is about 1.6 dB louder; a
+`master_gain` of 1.2 matches it. Songs can lower the volume further with a
+master volume SysEx message.
+
+The output never clips: a look-ahead limiter (on by default,
+`SynthesizerSettings::limiter`) holds the mix below −0.45 dBFS, turning down
+only the passages that would go over — ramping down 1 ms before a peak and
+back up over about 150 ms — and leaving everything else untouched. It
+delays the mix by 1 ms (`Synthesizer::latency`). How much it works depends
+on the SoundFont:
+
+| At `master_gain` 1.0 | Loudest reduction | Time turned down by over 0.5 dB / 3 dB |
+|---|---|---|
+| GeneralUser GS, Chopin étude | 2.8 dB | 0.8% / 0% |
+| YDP Grand Piano, Chopin étude | 7.5 dB | 17.7% / 2.1% |
+
+A hot SoundFont like YDP sounds more natural a little lower (`master_gain`
+0.5–0.7) with the limiter only catching the peaks.
 
 ### In an audio callback
 
@@ -153,7 +167,7 @@ Without another dependency, [`sf2synth-mmap`](mmap) maps a file with the
 system's own `mmap` (Unix) or file mapping (Windows):
 
 ```toml
-sf2synth-mmap = { git = "https://github.com/albos-inc/sf2synth", tag = "v0.3.0" }
+sf2synth-mmap = { git = "https://github.com/albos-inc/sf2synth", tag = "v0.3.1" }
 ```
 
 ```rust

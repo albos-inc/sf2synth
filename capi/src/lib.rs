@@ -400,6 +400,25 @@ pub unsafe extern "C" fn sf2synth_set_chorus_enabled(synth: *mut Synth, enabled:
 /// # Safety
 /// See [`with`].
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn sf2synth_set_limiter(synth: *mut Synth, enabled: bool) {
+    unsafe { with(synth, |s| s.set_limiter(enabled)) }
+}
+
+/// # Safety
+/// `synth` is NULL or live.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sf2synth_latency(synth: *const Synth) -> u32 {
+    unsafe { synth.as_ref() }.map_or(0, |s| s.0.latency() as u32)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn sf2synth_limiter_latency(sample_rate: u32) -> u32 {
+    Synthesizer::limiter_latency(sample_rate.max(1)) as u32
+}
+
+/// # Safety
+/// See [`with`].
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn sf2synth_set_channel_drum(synth: *mut Synth, channel: u8, drum: bool) {
     unsafe { with(synth, |s| s.set_channel_drum(channel, drum)) }
 }
