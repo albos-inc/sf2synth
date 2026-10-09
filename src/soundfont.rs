@@ -291,13 +291,29 @@ impl SoundFont {
         self.preset_index.get(&(bank, program)).copied()
     }
 
-    /// The preset to play for `(bank, program)`, falling back like General
-    /// MIDI players do: the same program in bank 0 (or program 0 of bank 128
-    /// for drums), then the first preset.
-    pub(crate) fn resolve_preset(&self, bank: u16, program: u16) -> Option<usize> {
+    /// The melodic preset to play for bank select MSB `bank` and `program`,
+    /// falling back like GS sound modules do: the variation's capital tone
+    /// (bank `bank & !7`, as bank 8 is for banks 9…15), then bank 0, then the
+    /// first preset.
+    pub(crate) fn resolve_melodic(&self, bank: u16, program: u16) -> Option<usize> {
         self.find_preset(bank, program)
-            .or_else(|| if bank == 128 { self.find_preset(128, 0) } else { self.find_preset(0, program) })
-            .or(if self.presets.is_empty() { None } else { Some(0) })
+            .or_else(|| self.find_preset(bank & !7, program))
+            .or_else(|| self.find_preset(0, program))
+            .or_else(|| self.first_preset())
+    }
+
+    /// The drum kit to play for `program` (bank 128): the kit itself, its
+    /// capital kit (program `program & !7`, as Room is for 9…15), the
+    /// Standard kit (program 0), then the first preset.
+    pub(crate) fn resolve_drum_kit(&self, program: u16) -> Option<usize> {
+        self.find_preset(128, program)
+            .or_else(|| self.find_preset(128, program & !7))
+            .or_else(|| self.find_preset(128, 0))
+            .or_else(|| self.first_preset())
+    }
+
+    fn first_preset(&self) -> Option<usize> {
+        if self.presets.is_empty() { None } else { Some(0) }
     }
 }
 

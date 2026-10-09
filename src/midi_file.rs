@@ -1,10 +1,11 @@
-//! Standard MIDI Files (format 0 and 1).
+//! Standard MIDI Files (formats 0, 1 and 2).
 
 use std::io::Read;
 
 use crate::error::{Error, Result};
 
-/// A channel message of a MIDI file, at its time.
+/// A channel message or System Exclusive message of a MIDI file, at its
+/// time.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MidiEvent {
     /// Seconds from the start, with the file's tempo changes applied.
@@ -13,14 +14,24 @@ pub struct MidiEvent {
     pub tick: u64,
     /// Index of the track the event is in.
     pub track: u16,
-    /// Status and data bytes; `len` of them are used.
+    /// Status and data bytes; `len` of them are used. A System Exclusive
+    /// message only has its status (`F0`) here: get the whole message with
+    /// [`MidiFile::message`].
     pub bytes: [u8; 3],
     pub len: u8,
+    /// A System Exclusive message's range in the file's SysEx data.
+    sysex: Option<(u32, u32)>,
 }
 
 impl MidiEvent {
+    /// The channel message. For the complete bytes of a System Exclusive
+    /// message, use [`MidiFile::message`].
     pub fn message(&self) -> &[u8] {
         &self.bytes[..self.len as usize]
+    }
+
+    pub fn is_sysex(&self) -> bool {
+        self.sysex.is_some()
     }
 
     pub fn status(&self) -> u8 {
@@ -45,14 +56,16 @@ pub struct TempoChange {
     pub microseconds_per_quarter: u32,
 }
 
-/// A parsed Standard MIDI File: its channel messages merged into one list
-/// sorted by time.
+/// A parsed Standard MIDI File: its channel and System Exclusive messages
+/// merged into one list sorted by time.
 #[derive(Clone, Debug)]
 pub struct MidiFile {
     format: u16,
     track_count: u16,
     division: u16,
     events: Vec<MidiEvent>,
+    /// The System Exclusive messages' bytes, `F0` to `F7`, one after another.
+    sysex_data: Vec<u8>,
     tempo_changes: Vec<TempoChange>,
     duration: f64,
 }
@@ -96,6 +109,8 @@ impl TrackReader<'_> {
 /// An event of one track, before the tracks are merged.
 enum Raw {
     Channel([u8; 3], u8),
+    /// A System Exclusive message, `F0` to `F7`.
+    SysEx(Vec<u8>),
     Tempo(u32),
     EndOfTrack,
 }
@@ -171,6 +186,7 @@ impl MidiFile {
         raw.sort_by_key(|&(tick, track, order, _)| (tick, track, order));
 
         let mut events = Vec::with_capacity(raw.len());
+        let mut sysex_data = Vec::new();
         let mut tempo_changes = Vec::new();
         let mut tempo = 500_000u32;
         let mut last_tick = 0u64;
@@ -199,13 +215,18 @@ impl MidiFile {
                     tempo = value.max(1);
                     tempo_changes.push(TempoChange { tick, time, microseconds_per_quarter: tempo });
                 }
-                Raw::Channel(bytes, len) => events.push(MidiEvent { time, tick, track, bytes, len }),
+                Raw::Channel(bytes, len) => events.push(MidiEvent { time, tick, track, bytes, len, sysex: None }),
+                Raw::SysEx(message) => {
+                    let range = (sysex_data.len() as u32, message.len() as u32);
+                    sysex_data.extend_from_slice(&message);
+                    events.push(MidiEvent { time, tick, track, bytes: [0xf0, 0, 0], len: 1, sysex: Some(range) });
+                }
                 Raw::EndOfTrack => {}
             }
         }
         let duration = last_time + (max_tick - last_tick) as f64 * seconds_per_tick(tempo);
 
-        Ok(MidiFile { format, track_count: track, division, events, tempo_changes, duration })
+        Ok(MidiFile { format, track_count: track, division, events, sysex_data, tempo_changes, duration })
     }
 
     /// 0, 1 or 2.
@@ -222,9 +243,18 @@ impl MidiFile {
         self.division
     }
 
-    /// Channel messages sorted by time.
+    /// Channel and System Exclusive messages sorted by time.
     pub fn events(&self) -> &[MidiEvent] {
         &self.events
+    }
+
+    /// The complete bytes of `event`: its channel message, or its System
+    /// Exclusive message from `F0` to `F7`.
+    pub fn message<'a>(&'a self, event: &'a MidiEvent) -> &'a [u8] {
+        match event.sysex {
+            Some((start, len)) => self.sysex_data.get(start as usize..(start + len) as usize).unwrap_or(&[]),
+            None => event.message(),
+        }
     }
 
     pub fn tempo_changes(&self) -> &[TempoChange] {
@@ -274,7 +304,21 @@ fn read_track(data: &[u8], track: u16, out: &mut Vec<(u64, u16, u32, Raw)>) {
                     _ => {}
                 }
             }
-            0xf0 | 0xf7 => {
+            0xf0 => {
+                let Some(length) = reader.variable_length() else { return };
+                let Some(body) = reader.skip(length as usize) else { return };
+                let mut message = Vec::with_capacity(body.len() + 2);
+                message.push(0xf0);
+                message.extend_from_slice(body);
+                if message.last() != Some(&0xf7) {
+                    // Continued in F7 packets, which aren't read: end it here.
+                    message.push(0xf7);
+                }
+                out.push((tick, track, order, Raw::SysEx(message)));
+                order += 1;
+            }
+            0xf7 => {
+                // Escaped bytes or a SysEx continuation packet: skipped.
                 let Some(length) = reader.variable_length() else { return };
                 if reader.skip(length as usize).is_none() {
                     return;

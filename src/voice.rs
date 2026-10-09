@@ -355,6 +355,7 @@ impl Voice {
             + p[g::FINE_TUNE as usize]
             + self.pitch_correction
             + channel.tuning
+            + channel.scale_tuning[self.key as usize % 12]
             + p[g::PITCH as usize]
             + p[g::MOD_LFO_TO_PITCH as usize] * modulation_lfo
             + p[g::VIB_LFO_TO_PITCH as usize] * vibrato_lfo

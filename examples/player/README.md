@@ -12,7 +12,7 @@ Ready-to-run builds are on the
 | | |
 |---|---|
 | Transport | Play / pause / stop, a seek bar, elapsed and remaining time |
-| Song | Title (the MIDI file's sequence name, Shift_JIS or UTF-8, else the file name), length, SMF format and tracks, tempo, resolution, notes and channels |
+| Song | Title (the MIDI file's sequence name, Shift_JIS or UTF-8, else the file name), length, SMF format and tracks, the standard it resets to (GM, GM2, GS, XG), tempo, resolution, notes and channels |
 | SoundFont | Bank name, file, SF2 version or DLS, size, presets / instruments / samples, copyright and comment |
 | Audio | Output device, sample rate, buffer size, voices playing |
 

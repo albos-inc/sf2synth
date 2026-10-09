@@ -1,0 +1,30 @@
+# The synthesizer alone behind a C interface (include/sf2synth.h), for Swift,
+# Kotlin/JNI, C and C++ apps. Build it as a static or shared library:
+#
+#   cargo build --release --target aarch64-apple-ios
+[package]
+name = "sf2synth-capi"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "A C interface to the sf2synth SF2 synthesizer, with memory-mapped SoundFont loading."
+license = "MIT OR Apache-2.0"
+authors = ["Albos Inc."]
+repository = "https://github.com/albos-inc/sf2synth"
+publish = false
+
+[lib]
+name = "sf2synth_c"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[dependencies]
+sf2synth = { path = ".." }
+
+[profile.release]
+lto = true
+codegen-units = 1
+# A panic must never unwind into the host's audio thread.
+panic = "abort"
+
+[profile.dev]
+panic = "abort"

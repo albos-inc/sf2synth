@@ -186,7 +186,8 @@ struct ContentView: View {
                     InfoRow("Title", song.title)
                     InfoRow("File", song.fileName)
                     InfoRow("Length", formatTime(song.duration))
-                    InfoRow("Format", "SMF \(song.format) · \(song.tracks) tracks")
+                    InfoRow("Format", "SMF \(song.format) · \(song.tracks) tracks"
+                        + (song.standard.isEmpty ? "" : " · \(song.standard)"))
                     InfoRow("Tempo", song.tempoChanges > 1
                         ? String(format: "%.1f BPM (%d changes)", song.tempoBpm, song.tempoChanges)
                         : String(format: "%.1f BPM", song.tempoBpm))

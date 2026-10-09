@@ -368,6 +368,8 @@ struct SongSummary: Decodable, Equatable {
     var fileName: String
     var title: String
     var format: Int
+    /// "GM", "GM2", "GS", "XG" or empty.
+    var standard: String
     var tracks: Int
     var ticksPerQuarter: Int
     var tempoBpm: Double

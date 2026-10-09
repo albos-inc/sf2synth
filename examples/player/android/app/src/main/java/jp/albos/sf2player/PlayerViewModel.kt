@@ -261,6 +261,8 @@ data class SongSummary(
     val fileName: String,
     val title: String,
     val format: Int,
+    /** "GM", "GM2", "GS", "XG" or empty. */
+    val standard: String,
     val tracks: Int,
     val ticksPerQuarter: Int,
     val tempoBpm: Double,
@@ -274,6 +276,7 @@ data class SongSummary(
             fileName = json.getString("file_name"),
             title = json.getString("title"),
             format = json.getInt("format"),
+            standard = json.optString("standard"),
             tracks = json.getInt("tracks"),
             ticksPerQuarter = json.getInt("ticks_per_quarter"),
             tempoBpm = json.getDouble("tempo_bpm"),

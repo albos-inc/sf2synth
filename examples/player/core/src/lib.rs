@@ -60,6 +60,10 @@ pub struct SongSummary {
     pub title: String,
     /// SMF format 0, 1 or 2.
     pub format: u16,
+    /// The standard the song resets the synthesizer to before its first
+    /// note with a System Exclusive message: "GM", "GM2", "GS" or "XG"
+    /// (empty if none).
+    pub standard: String,
     pub tracks: u16,
     /// Ticks per quarter note (0 for SMPTE timing).
     pub ticks_per_quarter: u16,
@@ -123,9 +127,14 @@ impl LoadedSong {
         let midi = MidiFile::from_bytes(bytes).map_err(|e| e.to_string())?;
         let mut channels = [false; 16];
         let mut notes = 0;
-        for event in midi.events().iter().filter(|e| e.is_note_on()) {
-            notes += 1;
-            channels[event.channel() as usize] = true;
+        let mut standard = "";
+        for event in midi.events() {
+            if event.is_note_on() {
+                notes += 1;
+                channels[event.channel() as usize] = true;
+            } else if event.is_sysex() && notes == 0 {
+                standard = reset_standard(midi.message(event)).unwrap_or(standard);
+            }
         }
         let tempo =
             midi.tempo_changes().first().filter(|t| t.tick == 0).map_or(500_000, |t| t.microseconds_per_quarter);
@@ -134,6 +143,7 @@ impl LoadedSong {
             file_name: file_name.to_string(),
             title: read_title(bytes).unwrap_or_else(|| file_stem(file_name)),
             format: midi.format(),
+            standard: standard.to_string(),
             tracks: midi.track_count(),
             ticks_per_quarter: if division & 0x8000 == 0 { division } else { 0 },
             tempo_bpm: 60_000_000.0 / tempo.max(1) as f64,
@@ -313,6 +323,17 @@ impl Player {
     }
 }
 
+/// The standard a System Exclusive reset message sets up.
+fn reset_standard(message: &[u8]) -> Option<&'static str> {
+    match message {
+        [0xf0, 0x7e, _, 0x09, 0x01, ..] => Some("GM"),
+        [0xf0, 0x7e, _, 0x09, 0x03, ..] => Some("GM2"),
+        [0xf0, 0x41, _, 0x42, 0x12, 0x40, 0x00, 0x7f, ..] => Some("GS"),
+        [0xf0, 0x43, device, 0x4c, 0x00, 0x00, 0x7e, ..] if device & 0xf0 == 0x10 => Some("XG"),
+        _ => None,
+    }
+}
+
 /// "1:05" or "1:02:05".
 pub fn format_time(seconds: f64) -> String {
     let total = seconds.max(0.0) as u64;
@@ -482,6 +503,18 @@ mod tests {
         assert!((player.position() - 0.25).abs() < 1e-9);
         player.stop();
         assert_eq!((player.state(), player.position()), (State::Stopped, 0.0));
+    }
+
+    #[test]
+    fn standards() {
+        let gm_then_gs = [
+            &[0xf0, 0x7e, 0x7f, 0x09, 0x01, 0xf7][..],
+            &[0xf0, 0x41, 0x10, 0x42, 0x12, 0x40, 0x00, 0x7f, 0x00, 0x41, 0xf7],
+        ];
+        assert_eq!(gm_then_gs.map(reset_standard), [Some("GM"), Some("GS")]);
+        assert_eq!(reset_standard(&[0xf0, 0x43, 0x10, 0x4c, 0x00, 0x00, 0x7e, 0x00, 0xf7]), Some("XG"));
+        assert_eq!(reset_standard(&[0xf0, 0x7f, 0x7f, 0x04, 0x01, 0, 0x7f, 0xf7]), None);
+        assert_eq!(LoadedSong::new(&smf(b"Test"), "test.mid").unwrap().summary().standard, "");
     }
 
     #[test]

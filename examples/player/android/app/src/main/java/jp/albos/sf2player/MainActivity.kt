@@ -256,7 +256,7 @@ private fun Information(player: PlayerViewModel) {
                 InfoRow("Title", song.title)
                 InfoRow("File", song.fileName)
                 InfoRow("Length", formatTime(song.duration))
-                InfoRow("Format", "SMF ${song.format} · ${song.tracks} tracks")
+                InfoRow("Format", "SMF ${song.format} · ${song.tracks} tracks" + if (song.standard.isEmpty()) "" else " · ${song.standard}")
                 InfoRow(
                     "Tempo",
                     if (song.tempoChanges > 1) "%.1f BPM (%d changes)".format(Locale.ROOT, song.tempoBpm, song.tempoChanges)

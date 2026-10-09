@@ -122,8 +122,8 @@ impl Sequencer {
     }
 
     /// Jumps to `seconds`. The synthesizer's notes are cut, then every
-    /// program, controller and pitch bend before that point is replayed, so
-    /// the music continues as it would have.
+    /// program, controller, pitch bend and System Exclusive message before
+    /// that point is replayed, so the music continues as it would have.
     pub fn seek(&mut self, seconds: f64, synth: &mut Synthesizer) {
         synth.sound_off_all();
         synth.reset_channels();
@@ -140,7 +140,7 @@ impl Sequencer {
         let next = events.partition_point(|e| e.time < target);
         for event in &events[..next] {
             if is_state(event) {
-                sink(0, event.message());
+                sink(0, midi.message(event));
             }
         }
         self.next = next;
@@ -150,9 +150,13 @@ impl Sequencer {
     /// Renders `left.len()` frames into the synthesizer's output, playing
     /// the events that fall in them. When paused (or finished) the
     /// synthesizer still renders, so releases ring out.
+    ///
+    /// If `left` and `right` differ in length, the shorter length is
+    /// rendered and the rest of the longer buffer is silenced.
     pub fn render(&mut self, synth: &mut Synthesizer, left: &mut [f32], right: &mut [f32]) {
-        assert_eq!(left.len(), right.len(), "left and right must have the same length");
-        let frames = left.len();
+        let frames = left.len().min(right.len());
+        left[frames..].fill(0.0);
+        right[frames..].fill(0.0);
         let mut done = 0;
         // Split the buffer at every event's frame.
         loop {
@@ -260,7 +264,7 @@ impl Sequencer {
             if event.is_note_on() && self.muted.get(event.track as usize).copied().unwrap_or(false) {
                 continue;
             }
-            sink(0, event.message());
+            sink(0, midi.message(event));
         }
     }
 }
@@ -278,5 +282,5 @@ enum Step {
 
 /// Whether an event sets state a seek must restore (everything but notes).
 fn is_state(event: &MidiEvent) -> bool {
-    matches!(event.status() & 0xf0, 0xb0 | 0xc0 | 0xd0 | 0xe0)
+    event.is_sysex() || matches!(event.status() & 0xf0, 0xb0 | 0xc0 | 0xd0 | 0xe0)
 }

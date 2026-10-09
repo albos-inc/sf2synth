@@ -10,7 +10,7 @@ repository = "https://github.com/albos-inc/sf2synth"
 readme = "README.md"
 keywords = ["sf2", "synthesizer", "midi", "audio", "piano"]
 categories = ["multimedia::audio"]
-exclude = ["/.github", "/testdata"]
+exclude = ["/.github", "/testdata", "/capi", "/apple", "/examples/player"]
 
 [dependencies]
 

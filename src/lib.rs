@@ -49,6 +49,7 @@ pub mod modulator;
 mod sequencer;
 mod soundfont;
 mod synth;
+mod sysex;
 mod voice;
 pub mod writer;
 

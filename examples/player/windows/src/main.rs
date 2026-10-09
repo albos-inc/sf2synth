@@ -308,7 +308,9 @@ impl eframe::App for PlayerApp {
                         row(ui, "Title", &s.title);
                         row(ui, "File", &s.file_name);
                         row(ui, "Length", &format_time(s.duration));
-                        row(ui, "Format", &format!("SMF {} · {} tracks", s.format, s.tracks));
+                        let standard =
+                            if s.standard.is_empty() { String::new() } else { format!(" · {}", s.standard) };
+                        row(ui, "Format", &format!("SMF {} · {} tracks{standard}", s.format, s.tracks));
                         let tempo = if s.tempo_changes > 1 {
                             format!("{:.1} BPM ({} tempo changes)", s.tempo_bpm, s.tempo_changes)
                         } else {

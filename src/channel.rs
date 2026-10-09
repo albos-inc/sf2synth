@@ -4,7 +4,10 @@ const RPN_NONE: u16 = 0x3fff;
 
 #[derive(Clone, Debug)]
 pub(crate) struct Channel {
+    /// Plays drum kits (bank 128).
     pub is_drum: bool,
+    /// Made a drum part by an XG Part Mode message, whatever its bank.
+    pub drum_part: bool,
     pub bank_msb: u8,
     pub bank_lsb: u8,
     pub program: u8,
@@ -17,8 +20,13 @@ pub(crate) struct Channel {
     data_entry_is_rpn: bool,
     /// RPN 0, in semitones (MSB) plus cents (LSB) / 100.
     pub pitch_wheel_sensitivity: f32,
-    /// RPN 1 (fine tuning) plus RPN 2 (coarse tuning), in cents.
+    /// RPN 1 (fine tuning) plus RPN 2 (coarse tuning) plus the master
+    /// tuning, in cents.
     pub tuning: f32,
+    /// Master Fine and Coarse Tuning (Universal SysEx), in cents.
+    master_tuning: f32,
+    /// GS Scale Tuning: cents added to each pitch class (0 = C).
+    pub scale_tuning: [f32; 12],
     fine_tuning: u16,
     coarse_tuning: u8,
     /// Incremented on every change a voice's modulators may read.
@@ -29,6 +37,7 @@ impl Channel {
     pub fn new(is_drum: bool) -> Channel {
         let mut channel = Channel {
             is_drum,
+            drum_part: false,
             bank_msb: 0,
             bank_lsb: 0,
             program: 0,
@@ -42,16 +51,12 @@ impl Channel {
             tuning: 0.0,
             fine_tuning: 8192,
             coarse_tuning: 64,
+            master_tuning: 0.0,
+            scale_tuning: [0.0; 12],
             version: 0,
         };
         channel.reset();
         channel
-    }
-
-    /// The SF2 bank of the channel: 128 for the drum channel, else the bank
-    /// select MSB.
-    pub fn bank(&self) -> u16 {
-        if self.is_drum { 128 } else { self.bank_msb as u16 }
     }
 
     /// Everything back to power-on state.
@@ -66,6 +71,7 @@ impl Channel {
         self.pitch_wheel_sensitivity = 2.0;
         self.fine_tuning = 8192;
         self.coarse_tuning = 64;
+        self.master_tuning = 0.0;
         self.update_tuning();
         self.reset_controllers();
     }
@@ -162,7 +168,13 @@ impl Channel {
     fn update_tuning(&mut self) {
         let fine = (self.fine_tuning as f32 - 8192.0) / 8192.0 * 100.0;
         let coarse = (self.coarse_tuning as f32 - 64.0) * 100.0;
-        self.tuning = fine + coarse;
+        self.tuning = fine + coarse + self.master_tuning;
+        self.version = self.version.wrapping_add(1);
+    }
+
+    pub fn set_master_tuning(&mut self, cents: f32) {
+        self.master_tuning = cents;
+        self.update_tuning();
     }
 
     pub fn set_pitch_wheel(&mut self, value: u16) {
