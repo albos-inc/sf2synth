@@ -51,7 +51,7 @@ Android, Windows and macOS, with
 
 ```toml
 [dependencies]
-sf2synth = { git = "https://github.com/albos-inc/sf2synth", tag = "v0.1.0" }
+sf2synth = { git = "https://github.com/albos-inc/sf2synth", tag = "v0.1.1" }
 ```
 
 ```rust

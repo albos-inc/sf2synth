@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.1 (2026-10-09)
+
+- apple: MIDI events were lost when a host pulled the reverb send bus (1)
+  before the mix (0), as AVAudioEngine does when bus 1 is connected first:
+  the engine passes a cycle's events only to its first render call. That
+  call now renders, whichever bus it is for.
+- apple: the README's reverb example gives the reverb's output connection
+  the synth's format (with `nil`, `AVAudioUnitReverb` stays at 44.1 kHz and
+  the engine fails to start at 48 kHz).
+
 ## 0.1.0 (2026-10-09)
 
 First version.

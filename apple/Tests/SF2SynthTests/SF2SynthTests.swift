@@ -84,6 +84,30 @@ final class SF2SynthTests: XCTestCase {
         engine.stop()
     }
 
+    /// The send straight into a reverb, connected first so that the engine
+    /// pulls bus 1 before bus 0 (and passes the events with bus 1). Both
+    /// connections of the reverb need the synth's format: with `nil`, its
+    /// output stays at 44.1 kHz and the engine fails to start (-10868).
+    func testReverbOnTheSendBus() throws {
+        let synth = try SF2SynthInstrument(soundFont: fontURL())
+        synth.synth.isReverbEnabled = false
+        let engine = AVAudioEngine()
+        let format = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 2)!
+        try engine.enableManualRenderingMode(.offline, format: format, maximumFrameCount: 4096)
+        let reverb = AVAudioUnitReverb()
+        engine.attach(synth)
+        engine.attach(reverb)
+        let synthFormat = synth.outputFormat(forBus: 1)
+        engine.connect(synth, to: reverb, fromBus: 1, toBus: 0, format: synthFormat)
+        engine.connect(reverb, to: engine.mainMixerNode, fromBus: 0, toBus: 0, format: synthFormat)
+        engine.connect(synth, to: engine.mainMixerNode, fromBus: 0, toBus: 1, format: synthFormat)
+        try engine.start()
+        XCTAssertEqual(try render(engine, frames: 4096), 0)
+        synth.startNote(60, withVelocity: 100, onChannel: 0)
+        XCTAssertGreaterThan(try render(engine, frames: 4096), 0.01, "the note-on reached the synth")
+        engine.stop()
+    }
+
     func testLoadingWhileRendering() throws {
         let url = try fontURL()
         let synth = try SF2SynthInstrument(soundFont: url)

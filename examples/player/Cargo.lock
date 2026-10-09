@@ -2069,7 +2069,7 @@ dependencies = [
 
 [[package]]
 name = "sf2synth"
-version = "0.1.0"
+version = "0.1.1"
 
 [[package]]
 name = "shlex"

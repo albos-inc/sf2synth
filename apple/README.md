@@ -6,7 +6,8 @@ sf2synth as an Audio Unit: a Swift package over the C interface in
 - `SF2SynthAudioUnit`: an in-process AUv3 music device. MIDI events are
   applied at their frame in each buffer; System Exclusive messages work
   even when the host splits them; MIDI 2.0 event lists are read too.
-  Output bus 0 is the mix, bus 1 the reverb send (CC91).
+  Output bus 0 is the mix, bus 1 the reverb send (CC91); both come from
+  one rendering per cycle, whichever the host pulls first.
 - `SF2SynthInstrument`: the same unit as an `AVAudioUnitMIDIInstrument`,
   to attach to an `AVAudioEngine`.
 
@@ -44,11 +45,17 @@ synth takes over at the next buffer.
 
 ```swift
 synth.synth.isReverbEnabled = false
-engine.connect(synth, to: reverb, fromBus: 1, toBus: 0, format: nil)
+let format = synth.outputFormat(forBus: 1)
+engine.connect(synth, to: reverb, fromBus: 1, toBus: 0, format: format)
+engine.connect(reverb, to: engine.mainMixerNode, fromBus: 0, toBus: 1, format: format)
 ```
 
-Bus 1 carries the mono reverb send on both channels. Bus 0 does the
-rendering; if the host pulls bus 1 first, the send lags by one buffer.
+Bus 1 carries the mono reverb send on both channels. Give the reverb's
+*output* connection the synth's format too: with `format: nil` an
+`AVAudioUnitReverb` keeps its default 44.1 kHz output, can't convert from a
+48 kHz input, and `engine.start()` fails with -10868
+(`kAudioUnitErr_FormatNotSupported`). A mixer between the synth and the
+reverb avoids it as well.
 
 ## Tests
 

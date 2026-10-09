@@ -15,9 +15,8 @@ public struct SF2SynthError: Error, CustomStringConvertible {
 /// Output bus 0 is the mix. Output bus 1 carries the reverb send (the
 /// signal the channels send to the reverb with CC91, the same on both
 /// channels): connect it to your own reverb and turn the built-in one off
-/// with ``isReverbEnabled``. Bus 0 does the rendering and bus 1 hands out
-/// the send of the latest rendering, so if a host pulls bus 1 first, the
-/// send lags by one buffer.
+/// with ``isReverbEnabled``. Both busses come from one rendering per
+/// render cycle, whichever the host pulls first.
 ///
 /// MIDI arrives as MIDI 1.0 events (System Exclusive included, even when
 /// split over several events) or as MIDI 2.0 event lists.
@@ -172,7 +171,11 @@ private final class Kernel {
     /// The send for bus 1's second channel, when the host asks for buffers.
     private var sendCopy: UnsafeMutablePointer<Float>?
     private var capacity = 0
+    /// The render cycle last rendered, and which busses it has served: a
+    /// bus pulled again starts the next cycle.
+    private var renderedSampleTime = Double.nan
     private var renderedFrames = 0
+    private var served = (false, false)
 
     deinit {
         deallocate()
@@ -217,6 +220,7 @@ private final class Kernel {
         sendCopy = .allocate(capacity: frames)
         send?.update(repeating: 0, count: frames)
         capacity = frames
+        renderedSampleTime = .nan
         renderedFrames = 0
         appliedVersion = -1
         let rate = UInt32(sampleRate.rounded())
@@ -255,17 +259,27 @@ private final class Kernel {
         guard let left, let right, let send, let sendCopy, frames <= capacity else {
             return kAudioUnitErr_TooManyFramesToProcess
         }
+        // A host pulling both busses passes the cycle's events only to the
+        // first call (AVAudioEngine does), so that call renders, whichever
+        // bus it is for, and the other bus gets the same rendering.
+        let sampleTime = timestamp.pointee.mSampleTime
+        let isServed = bus == 0 ? served.0 : served.1
+        if sampleTime != renderedSampleTime || frames != renderedFrames || isServed {
+            renderCycle(sampleTime: sampleTime, frames: frames, events: events)
+            renderedSampleTime = sampleTime
+            renderedFrames = frames
+            served = (false, false)
+        } else if let synth, events != nil {
+            // Events with the second call too: apply them now (they sound
+            // from the next buffer).
+            handle(events, synth: synth, sampleTime: sampleTime, frames: frames) { _ in }
+        }
+        if bus == 0 { served.0 = true } else { served.1 = true }
         // (No arrays here: they would allocate on the render thread.)
         let sources: (UnsafeMutablePointer<Float>, UnsafeMutablePointer<Float>)
         if bus == 0 {
-            renderCycle(sampleTime: timestamp.pointee.mSampleTime, frames: frames, events: events)
-            renderedFrames = frames
             sources = (left, right)
         } else {
-            // The latest rendering's send (silence past its end).
-            if frames > renderedFrames {
-                (send + renderedFrames).update(repeating: 0, count: frames - renderedFrames)
-            }
             sendCopy.update(from: send, count: frames)
             sources = (send, sendCopy)
         }
@@ -298,13 +312,21 @@ private final class Kernel {
                                    end - rendered, nil, 0)
             rendered = end
         }
+        handle(events, synth: synth, sampleTime: sampleTime, frames: frames, before: render(upTo:))
+        render(upTo: frames)
+    }
+
+    /// Passes `events` to the synth, calling `before(offset)` before each
+    /// with its frame offset in the buffer.
+    private func handle(_ events: UnsafePointer<AURenderEvent>?, synth: OpaquePointer, sampleTime: Double,
+                        frames: Int, before: (Int) -> Void) {
         let immediate = Int64(bitPattern: 0xffff_ffff_0000_0000)
         var event = events
         while let current = event {
             let head = current.pointee.head
             let time = head.eventSampleTime
             let offset = time >= immediate && time < 0 ? Int(time - immediate) : Int(Double(time) - sampleTime)
-            render(upTo: min(max(offset, rendered), frames))
+            before(min(max(offset, 0), frames))
             switch head.eventType {
             case .MIDI, .midiSysEx:
                 // A System Exclusive event's bytes run past `data`'s three:
@@ -325,7 +347,6 @@ private final class Kernel {
             }
             event = UnsafePointer(head.next)
         }
-        render(upTo: frames)
     }
 
     private func takeOverIfHanded() {
