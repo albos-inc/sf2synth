@@ -1,4 +1,4 @@
-//! Writing SF2 files.
+//! Writing SF2 files, and SFZ files with FLAC samples ([`SfzFiles`]).
 //!
 //! Build an [`Sf2Builder`] — samples, instruments made of zones that play
 //! them, presets made of zones that play instruments — and turn it into the
@@ -22,6 +22,8 @@
 
 use crate::generator as g;
 use crate::modulator::Modulator;
+
+pub use crate::sfz_writer::SfzFiles;
 
 /// A sample: 16-bit mono points and how to play them.
 #[derive(Clone, Debug)]

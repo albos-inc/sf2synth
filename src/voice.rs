@@ -60,6 +60,15 @@ pub(crate) struct VoiceStart<'a> {
     pub attenuation_scale: f32,
     pub sample_rate: f32,
     pub channel: &'a Channel,
+    /// Linear gain on top of the generators (an SFZ region's volume,
+    /// velocity curve, crossfades…); 1 for SF2.
+    pub gain: f32,
+    /// Plays to its end, whatever note-offs come.
+    pub one_shot: bool,
+    /// SFZ mute group, and the group whose start stops this voice.
+    pub group: i64,
+    pub off_by: Option<i64>,
+    pub off_fast: bool,
 }
 
 /// The mix buses a voice adds to.
@@ -80,6 +89,13 @@ pub(crate) struct Voice {
     /// Held by the sostenuto pedal.
     pub sostenuto: bool,
     pub exclusive_class: i16,
+    /// Ignores note-offs and the pedals (SFZ one-shot, release and
+    /// controller-triggered regions).
+    pub one_shot: bool,
+    pub group: i64,
+    pub off_by: Option<i64>,
+    pub off_fast: bool,
+    gain: f32,
     released: bool,
     /// Fading out fast (stolen, cut by an exclusive class or All Sound Off).
     killed: bool,
@@ -127,6 +143,11 @@ impl Default for Voice {
             key_down: false,
             sostenuto: false,
             exclusive_class: 0,
+            one_shot: false,
+            group: 0,
+            off_by: None,
+            off_fast: true,
+            gain: 1.0,
             released: false,
             killed: false,
             mod_key: 0,
@@ -171,6 +192,11 @@ impl Voice {
         self.released = false;
         self.killed = false;
         self.exclusive_class = instrument.get(g::EXCLUSIVE_CLASS).unwrap_or(0);
+        self.one_shot = s.one_shot;
+        self.group = s.group;
+        self.off_by = s.off_by;
+        self.off_fast = s.off_fast;
+        self.gain = s.gain;
 
         let keynum = instrument.get(g::KEYNUM).unwrap_or(-1);
         let velocity = instrument.get(g::VELOCITY).unwrap_or(-1);
@@ -407,7 +433,7 @@ impl Voice {
             + p[g::MOD_LFO_TO_FILTER_FC as usize] * self.modulation_lfo.value()
             + p[g::MOD_ENV_TO_FILTER_FC as usize] * self.modulation_envelope.value();
 
-        let gain = centibels_to_gain(attenuation) * self.volume_envelope.gain();
+        let gain = centibels_to_gain(attenuation) * self.volume_envelope.gain() * self.gain;
         let (sin, cos) = angle.sin_cos();
         let targets = [gain * cos, gain * sin, gain * reverb, gain * chorus];
 

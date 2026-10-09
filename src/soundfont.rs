@@ -13,6 +13,11 @@ use crate::modulator::Modulator;
 /// copied, so a memory-mapped file costs no heap memory.
 pub type SharedBytes = Arc<dyn AsRef<[u8]> + Send + Sync>;
 
+/// Reads a file an SFZ file refers to ([`SoundFont::from_sfz`]): its path
+/// relative to the SFZ file (`/`-separated), and `Some(n)` when its first
+/// `n` bytes are enough (more is fine).
+pub type FileLoader<'a> = dyn Fn(&str, Option<usize>) -> std::io::Result<Vec<u8>> + Sync + 'a;
+
 /// A parsed SF2 file.
 pub struct SoundFont {
     info: SoundFontInfo,
@@ -21,6 +26,11 @@ pub struct SoundFont {
     samples: Vec<SampleHeader>,
     pub(crate) data: SampleData,
     preset_index: HashMap<(u16, u16), usize>,
+    /// Round robin counters an SFZ instrument's regions use.
+    pub(crate) sfz_counters: usize,
+    /// Whether some zone starts on a controller instead of a note.
+    pub(crate) has_cc_triggers: bool,
+    warnings: Vec<String>,
 }
 
 impl std::fmt::Debug for SoundFont {
@@ -41,6 +51,8 @@ pub enum FileFormat {
     Sf2,
     /// Downloadable Sounds (levels 1 and 2), converted on loading.
     Dls,
+    /// An SFZ instrument and its WAV or FLAC samples, converted on loading.
+    Sfz,
 }
 
 /// The INFO chunk.
@@ -139,6 +151,8 @@ pub struct Zone {
     pub(crate) modulators: Vec<Modulator>,
     /// Instrument index (preset zones) or sample index (instrument zones).
     pub(crate) link: usize,
+    /// What an SFZ region does beyond SF2 (instrument zones of SFZ files).
+    pub(crate) sfz: Option<Arc<crate::sfz::SfzRegion>>,
 }
 
 impl Zone {
@@ -175,6 +189,33 @@ impl Zone {
     /// as an index into [`SoundFont::instruments`] or [`SoundFont::samples`].
     pub fn link(&self) -> usize {
         self.link
+    }
+
+    /// Whether a first note-on plays the zone — no controller moved yet, the
+    /// round robin at its start, the note's random number 0: every SF2 and
+    /// DLS zone, and the SFZ regions that aren't release-, legato- or
+    /// controller-triggered and are the first of their round robin and of
+    /// their random range. The zones a single sample per key and velocity
+    /// would be made from.
+    pub fn plays_on_first_note_on(&self) -> bool {
+        let Some(r) = &self.sfz else { return true };
+        let default_cc = |cc: u8| match cc {
+            7 => 100,
+            10 => 64,
+            11 => 127,
+            _ => 0,
+        };
+        matches!(r.trigger, crate::sfz::Trigger::Attack | crate::sfz::Trigger::First)
+            && r.cc_trigger.is_none()
+            && r.sequence.is_none_or(|(_, position, _)| position == 0)
+            && r.random.0 <= 0.0
+            && r.cc_conditions.iter().all(|&(cc, low, high)| (low..=high).contains(&default_cc(cc)))
+    }
+
+    /// The zone's own gain on top of its generators: an SFZ region's volume
+    /// and amplitude (1 for SF2 and DLS zones).
+    pub fn gain(&self) -> f32 {
+        self.sfz.as_ref().map_or(1.0, |r| r.gain)
     }
 }
 
@@ -281,6 +322,9 @@ impl SoundFont {
                 samples: converted.samples,
                 data: SampleData { bytes: Arc::new(converted.points), smpl: 0, sm24: None, len },
                 preset_index,
+                sfz_counters: 0,
+                has_cc_triggers: false,
+                warnings: Vec::new(),
             });
         }
         let parsed = parse(file)?;
@@ -295,7 +339,90 @@ impl SoundFont {
             samples: parsed.samples,
             data: SampleData { bytes, smpl: parsed.smpl.0, sm24: parsed.sm24, len: parsed.smpl.1 },
             preset_index,
+            sfz_counters: 0,
+            has_cc_triggers: false,
+            warnings: Vec::new(),
         })
+    }
+
+    /// Reads an instrument file: an SFZ file (by its `.sfz` extension) with
+    /// the WAV or FLAC samples it plays, or else an SF2 or DLS file.
+    pub fn open(path: impl AsRef<std::path::Path>) -> Result<SoundFont> {
+        let path = path.as_ref();
+        if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("sfz")) {
+            Self::open_sfz(path)
+        } else {
+            Self::from_bytes(std::fs::read(path)?)
+        }
+    }
+
+    /// Reads an SFZ file and the samples it plays (WAV or FLAC, 8 to 32
+    /// bits, mono or stereo), found from the SFZ file's directory. The
+    /// samples are decoded into memory (in parallel).
+    ///
+    /// Regions whose sample can't be read are left out, and opcodes this
+    /// crate doesn't follow are ignored; [`warnings`](Self::warnings) lists
+    /// both.
+    pub fn open_sfz(path: impl AsRef<std::path::Path>) -> Result<SoundFont> {
+        let path = path.as_ref();
+        let text = std::fs::read(path)?;
+        let directory = path.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+        let name = path.file_stem().map_or("SFZ".into(), |s| s.to_string_lossy().into_owned());
+        let load = |relative: &str, limit: Option<usize>| -> std::io::Result<Vec<u8>> {
+            let file = directory.join(relative);
+            match limit {
+                None => std::fs::read(file),
+                Some(limit) => {
+                    let mut bytes = Vec::with_capacity(limit);
+                    std::fs::File::open(file)?.take(limit as u64).read_to_end(&mut bytes)?;
+                    Ok(bytes)
+                }
+            }
+        };
+        Self::from_sfz(&String::from_utf8_lossy(&text), &name, &load)
+    }
+
+    /// Parses SFZ text, `load(path, limit)` reading the files it refers to
+    /// (`#include`s and samples) by their `/`-separated paths relative to
+    /// the SFZ file: all of a file, or at least its first `limit` bytes.
+    pub fn from_sfz(text: &str, name: &str, load: &FileLoader<'_>) -> Result<SoundFont> {
+        let converted = crate::sfz::load(text, name, load)?;
+        let mut preset_index = HashMap::new();
+        preset_index.insert((0, 0), 0);
+        let has_cc_triggers = converted
+            .instruments
+            .iter()
+            .flat_map(|i| &i.zones)
+            .any(|z| z.sfz.as_ref().is_some_and(|r| r.cc_trigger.is_some()));
+        let len = converted.len;
+        Ok(SoundFont {
+            info: converted.info,
+            presets: converted.presets,
+            instruments: converted.instruments,
+            samples: converted.samples,
+            data: SampleData {
+                bytes: Arc::new(converted.points),
+                smpl: 0,
+                sm24: converted.has_sm24.then_some(len * 2),
+                len,
+            },
+            preset_index,
+            sfz_counters: converted.counters,
+            has_cc_triggers,
+            warnings: converted.warnings,
+        })
+    }
+
+    /// What loading left out: SFZ opcodes ignored, sample files that
+    /// couldn't be read. Empty for SF2 and DLS files.
+    pub fn warnings(&self) -> &[String] {
+        &self.warnings
+    }
+
+    /// Whether the samples have 24-bit resolution (an SF2 sm24 chunk, or
+    /// SFZ samples of more than 16 bits).
+    pub fn is_24_bit(&self) -> bool {
+        self.data.sm24.is_some()
     }
 
     pub fn info(&self) -> &SoundFontInfo {
@@ -606,7 +733,7 @@ fn read_zones(
                 };
                 let (key_lo, key_hi) = key.unwrap_or((0, 127));
                 let (vel_lo, vel_hi) = vel.unwrap_or((0, 127));
-                zones.push(Zone { key_lo, key_hi, vel_lo, vel_hi, generators, modulators, link });
+                zones.push(Zone { key_lo, key_hi, vel_lo, vel_hi, generators, modulators, link, sfz: None });
             }
             Some(_) => {}
         }

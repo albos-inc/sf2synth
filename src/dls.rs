@@ -504,6 +504,7 @@ pub(crate) fn parse(file: &[u8]) -> Result<Converted> {
                 generators,
                 modulators,
                 link: sample_index,
+                sfz: None,
             });
         }
         if zones.is_empty() {
@@ -523,6 +524,7 @@ pub(crate) fn parse(file: &[u8]) -> Result<Converted> {
                 generators: GeneratorSet::default(),
                 modulators: Vec::new(),
                 link: instrument_index,
+                sfz: None,
             }],
         });
     }

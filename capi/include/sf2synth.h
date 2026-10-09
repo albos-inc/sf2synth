@@ -60,7 +60,8 @@ Sf2SynthSettings sf2synth_settings_default(uint32_t sample_rate);
 // The loaders return NULL on failure; then, if `error` isn't NULL, *error is
 // set to a message to free with sf2synth_string_free.
 
-// Reads an SF2 or DLS file into memory.
+// Reads an SF2 or DLS file into memory, or an SFZ file (by its .sfz
+// extension) and the WAV or FLAC samples it plays, decoded into memory.
 Sf2Font *sf2synth_font_load(const char *path, char **error);
 // Maps an SF2 file into memory instead of reading it: the sample data is read
 // from the file as it plays and costs no heap memory, however large the file.
@@ -68,7 +69,8 @@ Sf2Font *sf2synth_font_load(const char *path, char **error);
 // first use, possibly on the audio thread; the whole file is prefetched in
 // the background. Mapped on Unix (macOS, iOS, Linux, Android) and Windows;
 // read like sf2synth_font_load where mapping isn't available. DLS files are
-// converted on loading, so their samples end up in memory anyway.
+// converted on loading, so their samples end up in memory anyway, and SFZ
+// files are read as sf2synth_font_load reads them.
 Sf2Font *sf2synth_font_load_mapped(const char *path, char **error);
 // Parses an SF2 or DLS file held in memory (the bytes are copied).
 Sf2Font *sf2synth_font_load_memory(const uint8_t *bytes, size_t length, char **error);

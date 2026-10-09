@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.4.0 (2026-10-09)
+
+SFZ and FLAC.
+
+- **SFZ instruments:** `SoundFont::open_sfz`, `SoundFont::from_sfz` (with a
+  `FileLoader` for files from anywhere) and `SoundFont::open` (SFZ by the
+  extension, else SF2 or DLS). WAV (8–32-bit integer, 32/64-bit float, `smpl`
+  loops and root key) and FLAC samples, mono or stereo, decoded into memory
+  in parallel; `FileFormat::Sfz`, `SoundFont::warnings` (opcodes ignored,
+  samples unreadable), `SoundFont::is_24_bit`, `Error::InvalidSfz`.
+- Regions translate to SF2 generators and modulators, so an SF2 converted
+  to SFZ plays back bit for bit the same (the FreePats Salamander Grand
+  Piano, all keys and velocities with pedal and releases: identical
+  output). What SF2 can't say is played too: release triggers (`trigger=
+  release`, `release_key`, waiting for the sustain pedal, `rt_decay`), round
+  robin (`seq_length`, `seq_position`), random regions (`lorand`, `hirand`),
+  velocity and key crossfades (`xfin_*`, `xfout_*`, equal power or gain),
+  mute groups (`group`, `off_by`, `off_mode`), controller conditions
+  (`loccN`, `hiccN`) and controller-triggered regions (`on_loccN`,
+  `on_hiccN`: pedal noises), `first` / `legato` triggers, one-shots,
+  `amp_veltrack`, `amp_velcurve_N`, `amp_keytrack`, channel ranges. All of
+  it real-time safe.
+- **A FLAC decoder and encoder,** in the crate and without dependencies:
+  every stream the format allows decodes (checked against the reference
+  decoder, CRCs verified, damaged frames skipped); the encoder writes files
+  any decoder reads, about 4% smaller than `flac -8` on piano samples.
+- **SFZ writer:** `writer::SfzFiles::from_preset` writes any preset as SFZ
+  with FLAC samples (16 or 24-bit, stereo pairs as stereo files) that plays
+  back as the preset does; what SFZ can't express is listed in its
+  `warnings`.
+- `Zone::plays_on_first_note_on` and `Zone::gain`, to take an SFZ region's
+  main layer and level (as sf2studio's Create does).
+- C: `sf2synth_font_load` and `sf2synth_font_load_mapped` open SFZ files by
+  their `.sfz` extension.
+- Robustness tests for damaged SFZ text, WAV and FLAC files.
+
 ## 0.3.1 (2026-10-09)
 
 - **No more clipping:** a look-ahead peak limiter on the output, on by

@@ -1,7 +1,7 @@
 # sf2synth
 
-A real-time SF2 MIDI synthesizer and MIDI file sequencer in pure Rust,
-tuned for faithful piano reproduction.
+A real-time SF2 and SFZ MIDI synthesizer and MIDI file sequencer in pure
+Rust, tuned for faithful piano reproduction.
 
 - **Pure Rust, no dependencies, no `unsafe`.** Builds for every Rust target:
   Android, iOS, Windows, macOS, Linux, WebAssembly.
@@ -16,6 +16,13 @@ tuned for faithful piano reproduction.
   into macOS) load as the same presets and play the same way: regions,
   wave samples and loops, and articulation (envelopes, LFOs, filter,
   velocity and key scaling) translated to SF2 parameters.
+- **SFZ and FLAC too.** SFZ instruments with WAV or FLAC samples (8–32-bit,
+  mono or stereo, decoded in parallel with the crate's own FLAC decoder):
+  keys, velocities, tuning, envelopes, filter, velocity curves, loops, and
+  what SF2 can't say — release triggers with `rt_decay`, round robin and
+  random regions, velocity and key crossfades, mute groups (`group` /
+  `off_by`), controller conditions and controller-triggered regions (pedal
+  noises), first / legato triggers, one-shots.
 - **Piano details.** Sustain and sostenuto pedals, re-striking a key releases
   its previous strike, 4-point cubic interpolation (or band-limited 32-point
   sinc, free of aliasing), click-free gain ramps, filter sweeps and voice
@@ -35,9 +42,10 @@ tuned for faithful piano reproduction.
   external MIDI output with frame offsets.
 - **Effect sends out.** Render the reverb and chorus sends (CC91, CC93) to
   your own buffers to feed your own effects.
-- **SF2 writer.** Build presets, instruments, zones and samples and write
-  them as an SF2 file (`sf2synth::writer`); read any file's zones and sample
-  points back.
+- **SF2 and SFZ writers.** Build presets, instruments, zones and samples and
+  write them as an SF2 file (`sf2synth::writer`); write any preset as SFZ
+  with lossless FLAC samples (`SfzFiles`), which plays back bit for bit
+  the same; read any file's zones and sample points back.
 - **No audio I/O.** It renders into your buffers; play them with AAudio,
   Core Audio, WASAPI, [cpal](https://crates.io/crates/cpal) or anything else.
 - **C interface and Audio Unit.** [capi](capi) is the synthesizer as a C
@@ -54,7 +62,7 @@ Android, Windows and macOS, with
 
 ```toml
 [dependencies]
-sf2synth = { git = "https://github.com/albos-inc/sf2synth", tag = "v0.3.1" }
+sf2synth = { git = "https://github.com/albos-inc/sf2synth", tag = "v0.4.0" }
 ```
 
 ```rust
@@ -147,6 +155,72 @@ then select sounds by bank. Each standard is followed after its reset:
   settings given; GS scale tuning retunes each pitch class of a part.
 - In MIDI files, SysEx messages continued in `F7` packets are joined.
 
+### SFZ instruments
+
+```rust
+let font = SoundFont::open_sfz("Salamander/SalamanderGrandPiano.sfz")?;
+// Opcodes it ignored and samples it couldn't read, if any.
+for warning in font.warnings() {
+    eprintln!("{warning}");
+}
+// `SoundFont::open` picks SFZ by the extension, else reads SF2 or DLS.
+let font = SoundFont::open("piano.sfz")?;
+// From anywhere else: a loader gets each file by its path relative to the
+// SFZ file (and how much of its start would do).
+let font = SoundFont::from_sfz(&text, "piano", &|path, _limit| read_from_my_archive(path))?;
+```
+
+An SFZ file becomes one preset (bank 0, program 0) whose zones are its
+regions. The samples are decoded into memory when the file is read (an SFZ
+can't be memory-mapped): the original Salamander Grand Piano, 707 MB of
+24-bit FLAC, loads in about 1.3 s and takes 2 GB. Only the sample points are
+kept, as 16-bit points and, for samples of more than 16 bits, their low bytes.
+
+Opcodes read: `sample`, `default_path`, `#define`, `#include`, `note_offset`
+/ `octave_offset`, `key` / `lokey` / `hikey` (numbers or names, `c4` = 60),
+`lovel` / `hivel`, `pitch_keycenter` (or `sample`), `tune` / `pitch`,
+`transpose`, `pitch_keytrack`, `volume` / `gain`, `amplitude`, `pan`,
+`width`, `amp_veltrack`, `amp_velcurve_N`, `amp_keytrack` /
+`amp_keycenter`, `ampeg_delay` / `attack` / `hold` / `decay` / `sustain` /
+`release`, `delay`, `fil_type` (low-pass), `cutoff`, `resonance`,
+`fil_veltrack`, `fil_keytrack` / `fil_keycenter`, `fileg_*`, `pitcheg_*`,
+`pitchlfo_*`, `amplfo_*`, `fillfo_*`, `loop_mode`, `loop_start` /
+`loop_end` (or the WAV file's `smpl` loop), `offset`, `end`, `trigger`
+(`attack`, `release`, `release_key`, `first`, `legato`), `rt_decay`,
+`seq_length` / `seq_position`, `lorand` / `hirand`, `loccN` / `hiccN`,
+`on_loccN` / `on_hiccN`, `lochan` / `hichan`, `group` / `off_by` /
+`off_mode`, `xfin_*` / `xfout_*` (velocity and key), `xf_velcurve` /
+`xf_keycurve`, `effect1` / `effect2`. Others are listed in `warnings()`.
+
+How it plays:
+
+- Velocity → level is SF2's square law, as `amp_veltrack=100` is in SFZ; it
+  then follows the synthesizer's `default_modulators` like an SF2 does.
+  Other `amp_veltrack` values or an `amp_velcurve` replace it with the
+  region's own curve. Velocity → cutoff is only `fil_veltrack` (SF2's
+  default −2400 cents doesn't apply).
+- `trigger=release` regions sound at note-off, or when the sustain pedal
+  lets the note go, at the note-on's velocity, quieter by `rt_decay` dB per
+  second the key was down; `release_key` ones at note-off whatever the
+  pedal. They, one-shots and controller-triggered regions play to their end
+  whatever note-offs and pedals come.
+- A controller-triggered region (`on_loccN`) starts when the controller
+  moves into its range, at its own pitch and full velocity.
+
+`SfzFiles` writes any preset (of an SF2, DLS or SFZ file) as SFZ with FLAC
+samples — 16 or 24-bit as the file is, stereo pairs as stereo files — so
+that sf2synth plays it back exactly as it plays the preset:
+
+```rust
+let font = SoundFont::open("Salamander.sf2")?;
+let sfz = sf2synth::writer::SfzFiles::from_preset(&font, 0, "samples/");
+sfz.write("Salamander/Salamander.sfz")?; // 1,266 MB of samples → 185 MB
+```
+
+The FLAC encoder (fixed and LPC prediction up to order 12, partitioned Rice
+coding, the best of four stereo decorrelations) writes files any FLAC
+decoder reads, about 4% smaller than `flac -8` on piano samples.
+
 ### Changing the sample rate
 
 `Synthesizer::set_sample_rate` keeps the font, settings and MIDI state.
@@ -167,7 +241,7 @@ Without another dependency, [`sf2synth-mmap`](mmap) maps a file with the
 system's own `mmap` (Unix) or file mapping (Windows):
 
 ```toml
-sf2synth-mmap = { git = "https://github.com/albos-inc/sf2synth", tag = "v0.3.1" }
+sf2synth-mmap = { git = "https://github.com/albos-inc/sf2synth", tag = "v0.4.0" }
 ```
 
 ```rust

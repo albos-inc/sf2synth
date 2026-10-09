@@ -2,7 +2,7 @@
 //! velocity response and timbre with another synthesizer.
 //!
 //! ```text
-//! cargo run --release --example notes -- <font.sf2> <out.wav> [keys] [velocities] [seconds]
+//! cargo run --release --example notes -- <font.sf2/.sfz> <out.wav> [keys] [velocities] [seconds]
 //! ```
 //!
 //! `keys` and `velocities` are comma-separated (default `36,60,84` and
@@ -26,7 +26,7 @@ fn list(text: Option<&String>, default: &[u8]) -> Result<Vec<u8>, std::num::Pars
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 3 {
-        eprintln!("usage: notes <font.sf2> <out.wav> [keys] [velocities] [seconds]");
+        eprintln!("usage: notes <font.sf2/.sfz> <out.wav> [keys] [velocities] [seconds]");
         std::process::exit(2);
     }
     let keys = list(args.get(3), &[36, 60, 84])?;
@@ -34,7 +34,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let hold: f64 = args.get(5).map(|s| s.parse()).transpose()?.unwrap_or(2.0);
     let sample_rate = 48_000;
 
-    let font = Arc::new(SoundFont::from_bytes(std::fs::read(&args[1])?)?);
+    let font = Arc::new(SoundFont::open(&args[1])?);
     let mut settings = SynthesizerSettings::new(sample_rate);
     settings.reverb.enabled = false;
     settings.chorus.enabled = false;

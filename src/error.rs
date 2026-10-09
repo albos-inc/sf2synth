@@ -7,6 +7,8 @@ pub enum Error {
     Io(std::io::Error),
     /// The data is not a usable SF2 file.
     InvalidSoundFont(String),
+    /// The SFZ file (or every sample it plays) is not usable.
+    InvalidSfz(String),
     /// The data is not a usable Standard MIDI File.
     InvalidMidiFile(String),
     /// A setting is out of its range.
@@ -18,6 +20,7 @@ impl fmt::Display for Error {
         match self {
             Error::Io(error) => write!(f, "I/O error: {error}"),
             Error::InvalidSoundFont(message) => write!(f, "invalid SF2 file: {message}"),
+            Error::InvalidSfz(message) => write!(f, "invalid SFZ file: {message}"),
             Error::InvalidMidiFile(message) => write!(f, "invalid MIDI file: {message}"),
             Error::InvalidSettings(message) => write!(f, "invalid settings: {message}"),
         }

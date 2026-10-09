@@ -225,3 +225,57 @@ fn damaged_dls() {
     }
     assert!(played > 10, "{played}");
 }
+
+#[test]
+fn damaged_sfz_and_samples() {
+    use sf2synth::writer::SfzFiles;
+    // An SFZ playing a WAV and a FLAC (made by writing an SF2 as SFZ).
+    let sf2 = SoundFont::from_bytes(sine_font(&[looping_zone()])).unwrap();
+    let written = SfzFiles::from_preset(&sf2, 0, "");
+    let (flac_name, flac) = written.samples[0].clone();
+    let mut wav = b"RIFF\0\0\0\0WAVEfmt \x10\0\0\0\x01\0\x01\0\x44\xac\0\0\x88\x58\x01\0\x02\0\x10\0data".to_vec();
+    let points: Vec<u8> = (0..20000).flat_map(|i| (((i as f32 / 50.0).sin() * 9000.0) as i16).to_le_bytes()).collect();
+    wav.extend_from_slice(&(points.len() as u32).to_le_bytes());
+    wav.extend_from_slice(&points);
+    let text = format!(
+        "#define $K 60\n<control> default_path=\n<global> ampeg_release=0.2 amp_veltrack=80\n\
+         <group> seq_length=2 lokey=0 hikey=$K\n<region> sample={flac_name} seq_position=1 loop_mode=loop_continuous\n\
+         <region> sample=s.wav seq_position=2 loop_start=100 loop_end=19000 cutoff=2000 fil_veltrack=1200\n\
+         <group> trigger=release rt_decay=3 lokey=61 hikey=127\n<region> sample=s.wav pitch_keycenter=c5 xfin_lovel=20 xfin_hivel=90\n\
+         <group> on_locc64=64 on_hicc64=127 group=1 off_by=2\n<region> sample={flac_name} lorand=0 hirand=0.5"
+    );
+    let mut random = Random(0xbad_5f2);
+    let mut loaded = 0;
+    for round in 0..400 {
+        let (mut text, mut wav, mut flac) = (text.clone().into_bytes(), wav.clone(), flac.clone());
+        for target in [&mut text, &mut wav, &mut flac] {
+            if random.below(3) == 0 {
+                for _ in 0..1 + random.below(6) {
+                    let at = random.below(target.len());
+                    target[at] = random.byte();
+                }
+            }
+            if random.below(10) == 0 {
+                target.truncate(random.below(target.len()));
+            }
+        }
+        let files = [(flac_name.clone(), flac), ("s.wav".to_string(), wav)];
+        let load = |path: &str, _: Option<usize>| -> std::io::Result<Vec<u8>> {
+            files.iter().find(|f| f.0 == path).map(|f| f.1.clone()).ok_or(std::io::ErrorKind::NotFound.into())
+        };
+        let Ok(font) = SoundFont::from_sfz(&String::from_utf8_lossy(&text), "damaged", &load) else { continue };
+        loaded += 1;
+        let mut synth = Synthesizer::new(Arc::new(font), &SynthesizerSettings::new(SAMPLE_RATE)).unwrap();
+        synth.control_change(0, 64, 127);
+        for key in [0, 30, 60, 61, 90, 127] {
+            synth.note_on(0, key, 1 + random.byte() % 127);
+        }
+        render_finite(&mut synth, 1024, &format!("damaged SFZ, round {round}"));
+        for key in [0, 30, 60, 61, 90, 127] {
+            synth.note_off(0, key);
+        }
+        synth.control_change(0, 64, 0);
+        render_finite(&mut synth, 1024, &format!("damaged SFZ, round {round}"));
+    }
+    assert!(loaded > 200, "{loaded}");
+}

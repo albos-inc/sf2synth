@@ -112,19 +112,25 @@ fn new_font(result: sf2synth::Result<SoundFont>) -> Result<*mut Font, String> {
 pub unsafe extern "C" fn sf2synth_font_load(path: *const c_char, error: *mut *mut c_char) -> *mut Font {
     let result = unsafe { path_string(path) }
         .map_err(String::from)
-        .and_then(|path| std::fs::read(&path).map_err(|e| format!("{path}: {e}")))
-        .and_then(|bytes| new_font(SoundFont::from_bytes(bytes)));
+        .and_then(|path| new_font(SoundFont::open(&path)).map_err(|e| format!("{path}: {e}")));
     result.unwrap_or_else(|message| unsafe { fail(error, message) })
+}
+
+fn is_sfz(path: &str) -> bool {
+    std::path::Path::new(path).extension().is_some_and(|e| e.eq_ignore_ascii_case("sfz"))
 }
 
 /// # Safety
 /// `path` is a NUL-terminated string; `error` is NULL or writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sf2synth_font_load_mapped(path: *const c_char, error: *mut *mut c_char) -> *mut Font {
-    let result = unsafe { path_string(path) }
-        .map_err(String::from)
-        .and_then(|path| map_file(&path).map_err(|e| format!("{path}: {e}")))
-        .and_then(|bytes| new_font(SoundFont::from_shared(bytes)));
+    let result = unsafe { path_string(path) }.map_err(String::from).and_then(|path| {
+        if is_sfz(&path) {
+            // An SFZ file's samples are decoded into memory.
+            return new_font(SoundFont::open_sfz(&path)).map_err(|e| format!("{path}: {e}"));
+        }
+        map_file(&path).map_err(|e| format!("{path}: {e}")).and_then(|bytes| new_font(SoundFont::from_shared(bytes)))
+    });
     result.unwrap_or_else(|message| unsafe { fail(error, message) })
 }
 

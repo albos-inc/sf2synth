@@ -7,7 +7,8 @@ use crate::effects::{Chorus, ChorusSettings, GsEffects, Reverb, ReverbSettings};
 use crate::error::{Error, Result};
 use crate::limiter::Limiter;
 use crate::modulator::Modulator;
-use crate::soundfont::SoundFont;
+use crate::sfz::{SfzRegion, Trigger};
+use crate::soundfont::{SoundFont, Zone};
 use crate::sysex::{self, SysEx, SysExBuffer};
 use crate::voice::{BLOCK, Buses, Interpolation, Voice, VoiceStart};
 
@@ -161,6 +162,44 @@ pub struct Synthesizer {
     // Input parsing.
     sysex: SysExBuffer,
     stream: ByteStream,
+    // What SFZ regions need.
+    /// Frames rendered since construction.
+    frame: u64,
+    /// Each channel's keys (channel × 128 + key).
+    keys: Vec<KeyState>,
+    sequences: Vec<Sequence>,
+    random: u32,
+}
+
+/// A key of a channel, for SFZ release and first / legato triggers.
+#[derive(Clone, Copy, Debug, Default)]
+struct KeyState {
+    down: bool,
+    velocity: u8,
+    /// The frame of its note-on.
+    on_frame: u64,
+    /// Released while the sustain pedal was down: its release regions wait
+    /// for the pedal.
+    pending_release: bool,
+}
+
+/// A round robin counter: the position the current note plays.
+#[derive(Clone, Copy, Debug, Default)]
+struct Sequence {
+    next: u32,
+    current: u32,
+    /// The note that last advanced it.
+    note: u64,
+}
+
+/// Which regions a note event starts.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Event {
+    NoteOn,
+    /// Note-off; `pedal_up` once the sustain pedal no longer holds it.
+    NoteOff {
+        pedal_up: bool,
+    },
 }
 
 impl Synthesizer {
@@ -202,7 +241,12 @@ impl Synthesizer {
             gs_effects: GsEffects::default(),
             sysex: SysExBuffer::new(),
             stream: ByteStream::default(),
+            frame: 0,
+            keys: vec![KeyState::default(); CHANNEL_COUNT * 128],
+            sequences: Vec::new(),
+            random: 0x9e37_79b9,
         };
+        synth.sequences = vec![Sequence { note: u64::MAX, ..Default::default() }; synth.font.sfz_counters];
         synth.reset_midi_state(Mode::General);
         Ok(synth)
     }
@@ -398,60 +442,208 @@ impl Synthesizer {
             self.note_off(channel as u8, key);
             return;
         }
-        let Some(preset_index) = self.channels[channel].preset else { return };
+        if self.channels[channel].preset.is_none() {
+            return;
+        }
 
         if self.release_same_key {
             for voice in &mut self.voices {
-                if voice.active && voice.channel as usize == channel && voice.key == key && !voice.is_released() {
+                if voice.active
+                    && voice.channel as usize == channel
+                    && voice.key == key
+                    && !voice.is_released()
+                    && !voice.one_shot
+                {
                     voice.release();
                 }
             }
         }
 
+        let keys = &mut self.keys[channel * 128..channel * 128 + 128];
+        let others_down = keys.iter().enumerate().any(|(k, state)| state.down && k != key as usize);
+        keys[key as usize] = KeyState { down: true, velocity, on_frame: self.frame, pending_release: false };
+        self.start_regions(channel, key, velocity, Event::NoteOn, others_down, 0.0);
+    }
+
+    /// Starts the voices of the zones of `channel`'s preset that `event`
+    /// on `key` at `velocity` plays. `held` is how long the key was down
+    /// (seconds), for SFZ release regions.
+    fn start_regions(&mut self, channel: usize, key: u8, velocity: u8, event: Event, others_down: bool, held: f32) {
+        let Some(preset_index) = self.channels[channel].preset else { return };
         let note_id = self.next_note_id;
         self.next_note_id += 1;
+        let random = self.next_random();
         let font = Arc::clone(&self.font);
         let preset = &font.presets()[preset_index];
         for preset_zone in preset.zones.iter().filter(|z| z.contains(key, velocity)) {
             let Some(instrument) = font.instruments().get(preset_zone.link) else { continue };
             for instrument_zone in instrument.zones.iter().filter(|z| z.contains(key, velocity)) {
-                let Some(sample) = font.samples().get(instrument_zone.link) else { continue };
-                if sample.is_rom() {
+                let mut gain = 1.0;
+                let mut one_shot = false;
+                if let Some(region) = &instrument_zone.sfz {
+                    let plays = match (region.trigger, event) {
+                        _ if region.cc_trigger.is_some() => false,
+                        (Trigger::Attack, Event::NoteOn) => true,
+                        (Trigger::First, Event::NoteOn) => !others_down,
+                        (Trigger::Legato, Event::NoteOn) => others_down,
+                        (Trigger::Release, Event::NoteOff { pedal_up }) => pedal_up,
+                        (Trigger::ReleaseKey, Event::NoteOff { pedal_up }) => !pedal_up,
+                        _ => false,
+                    };
+                    if !plays || !self.region_allowed(region, channel, random, note_id) {
+                        continue;
+                    }
+                    gain = region.note_gain(key, velocity);
+                    if region.rt_decay != 0.0 && matches!(event, Event::NoteOff { .. }) {
+                        gain *= 10f32.powf(-region.rt_decay * held / 20.0);
+                    }
+                    one_shot = region.one_shot || matches!(event, Event::NoteOff { .. });
+                } else if event != Event::NoteOn {
                     continue;
                 }
-                let exclusive_class = instrument_zone.generators.get(crate::generator::EXCLUSIVE_CLASS).unwrap_or(0);
-                if exclusive_class != 0 {
-                    for voice in &mut self.voices {
-                        if voice.active
-                            && voice.channel as usize == channel
-                            && voice.exclusive_class == exclusive_class
-                            && voice.note_id != note_id
-                        {
-                            voice.kill();
-                        }
+                self.start_voice(channel, key, velocity, note_id, preset_zone, instrument_zone, gain, one_shot);
+            }
+        }
+    }
+
+    /// Whether an SFZ region's conditions let it play: channel, controller
+    /// ranges, random range and round robin position.
+    fn region_allowed(&mut self, region: &SfzRegion, channel: usize, random: f32, note_id: u64) -> bool {
+        if !(region.channels.0 as usize..=region.channels.1 as usize).contains(&channel) {
+            return false;
+        }
+        let cc = &self.channels[channel].cc;
+        if !region.cc_conditions.iter().all(|&(n, low, high)| (low..=high).contains(&cc[n as usize])) {
+            return false;
+        }
+        let (low, high) = region.random;
+        if random < low || (random >= high && high < 1.0) {
+            return false;
+        }
+        if let Some((length, position, counter)) = region.sequence {
+            let Some(sequence) = self.sequences.get_mut(counter) else { return true };
+            if sequence.note != note_id {
+                sequence.current = sequence.next;
+                sequence.next = sequence.next.wrapping_add(1);
+                sequence.note = note_id;
+            }
+            if sequence.current % length != position {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// A random number in 0…1 for a note (xorshift).
+    fn next_random(&mut self) -> f32 {
+        let mut x = self.random;
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        self.random = x;
+        (x >> 8) as f32 / (1u32 << 24) as f32
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn start_voice(
+        &mut self,
+        channel: usize,
+        key: u8,
+        velocity: u8,
+        note_id: u64,
+        preset_zone: &Zone,
+        instrument_zone: &Zone,
+        gain: f32,
+        one_shot: bool,
+    ) {
+        let font = Arc::clone(&self.font);
+        let Some(sample) = font.samples().get(instrument_zone.link) else { return };
+        if sample.is_rom() {
+            return;
+        }
+        let exclusive_class = instrument_zone.generators.get(crate::generator::EXCLUSIVE_CLASS).unwrap_or(0);
+        if exclusive_class != 0 {
+            for voice in &mut self.voices {
+                if voice.active
+                    && voice.channel as usize == channel
+                    && voice.exclusive_class == exclusive_class
+                    && voice.note_id != note_id
+                {
+                    voice.kill();
+                }
+            }
+        }
+        let region = instrument_zone.sfz.as_deref();
+        let group = region.map_or(0, |r| r.group);
+        if group != 0 {
+            for voice in &mut self.voices {
+                if voice.active
+                    && voice.channel as usize == channel
+                    && voice.off_by == Some(group)
+                    && voice.note_id != note_id
+                {
+                    if voice.off_fast {
+                        voice.kill();
+                    } else {
+                        voice.release();
                     }
                 }
-                let slot = self.allocate_voice(note_id);
-                let start = VoiceStart {
-                    channel_index: channel as u8,
-                    key,
-                    velocity,
-                    note_id,
-                    preset_zone,
-                    instrument_zone,
-                    sample,
-                    sample_count: font.data.len,
-                    default_modulators: &self.default_modulators,
-                    // DLS attenuations are exact centibels, not E-mu's.
-                    attenuation_scale: if font.info().format == crate::FileFormat::Dls {
-                        1.0
-                    } else {
-                        self.attenuation_scale
-                    },
-                    sample_rate: self.sample_rate,
-                    channel: &self.channels[channel],
-                };
-                self.voices[slot].start(&start);
+            }
+        }
+        let slot = self.allocate_voice(note_id);
+        let start = VoiceStart {
+            channel_index: channel as u8,
+            key,
+            velocity,
+            note_id,
+            preset_zone,
+            instrument_zone,
+            sample,
+            sample_count: font.data.len,
+            default_modulators: &self.default_modulators,
+            // DLS and SFZ attenuations are exact centibels, not E-mu's.
+            attenuation_scale: if font.info().format == crate::FileFormat::Sf2 { self.attenuation_scale } else { 1.0 },
+            sample_rate: self.sample_rate,
+            channel: &self.channels[channel],
+            gain,
+            one_shot,
+            group,
+            off_by: region.and_then(|r| r.off_by),
+            off_fast: region.is_none_or(|r| r.off_fast),
+        };
+        self.voices[slot].start(&start);
+        if one_shot {
+            self.voices[slot].key_down = false;
+        }
+    }
+
+    /// Starts the SFZ regions that controller `controller` moving from
+    /// `previous` to `value` triggers.
+    fn controller_regions(&mut self, channel: usize, controller: u8, previous: u8, value: u8) {
+        let Some(preset_index) = self.channels[channel].preset else { return };
+        let font = Arc::clone(&self.font);
+        let preset = &font.presets()[preset_index];
+        let note_id = self.next_note_id;
+        self.next_note_id += 1;
+        let random = self.next_random();
+        for preset_zone in &preset.zones {
+            let Some(instrument) = font.instruments().get(preset_zone.link) else { continue };
+            for zone in &instrument.zones {
+                let Some(region) = &zone.sfz else { continue };
+                let Some((number, low, high)) = region.cc_trigger else { continue };
+                let range = low..=high;
+                if number != controller || !range.contains(&value) || range.contains(&previous) {
+                    continue;
+                }
+                if !self.region_allowed(region, channel, random, note_id) {
+                    continue;
+                }
+                // It plays at its own pitch and full velocity (its level is
+                // its volume: a pedal let up to 0 still sounds).
+                let key = zone.generators.get(crate::generator::OVERRIDING_ROOT_KEY).unwrap_or(60).clamp(0, 127) as u8;
+                let velocity = 127;
+                let gain = region.note_gain(key, velocity);
+                self.start_voice(channel, key, velocity, note_id, preset_zone, zone, gain, true);
             }
         }
     }
@@ -501,13 +693,53 @@ impl Synthesizer {
 
     pub fn note_off(&mut self, channel: u8, key: u8) {
         let Some(c) = self.channels.get(channel as usize) else { return };
+        let key = key & 0x7f;
         let sustain = c.sustain();
         for voice in &mut self.voices {
             if voice.active && voice.channel == channel && voice.key == key && voice.key_down {
                 voice.key_down = false;
-                if !sustain && !voice.sostenuto {
+                if !sustain && !voice.sostenuto && !voice.one_shot {
                     voice.release();
                 }
+            }
+        }
+        let index = channel as usize * 128 + key as usize;
+        let state = self.keys[index];
+        if !state.down {
+            return;
+        }
+        self.keys[index].down = false;
+        if self.font.info().format == crate::FileFormat::Sfz {
+            let held = (self.frame - state.on_frame) as f32 / self.sample_rate;
+            let channel = channel as usize;
+            // Release regions: release_key ones now, release ones once the
+            // pedal lets the note go.
+            self.start_regions(channel, key, state.velocity, Event::NoteOff { pedal_up: false }, false, held);
+            if sustain {
+                self.keys[index].pending_release = true;
+            } else {
+                self.start_regions(channel, key, state.velocity, Event::NoteOff { pedal_up: true }, false, held);
+            }
+        }
+    }
+
+    /// Starts the release regions of `channel`'s keys let go while the
+    /// sustain pedal was down.
+    fn release_pending(&mut self, channel: u8) {
+        for key in 0..128u8 {
+            let index = channel as usize * 128 + key as usize;
+            let state = self.keys[index];
+            if state.pending_release && !state.down {
+                self.keys[index].pending_release = false;
+                let held = (self.frame - state.on_frame) as f32 / self.sample_rate;
+                self.start_regions(
+                    channel as usize,
+                    key,
+                    state.velocity,
+                    Event::NoteOff { pedal_up: true },
+                    false,
+                    held,
+                );
             }
         }
     }
@@ -518,6 +750,7 @@ impl Synthesizer {
             return;
         }
         let (controller, value) = (controller & 0x7f, value & 0x7f);
+        let previous = self.channels[index].cc[controller as usize];
         match controller {
             120 => {
                 self.channels[index].control_change(controller, value);
@@ -539,6 +772,7 @@ impl Synthesizer {
                 self.channels[index].control_change(controller, value);
                 if !self.channels[index].sustain() {
                     self.release_unheld(channel);
+                    self.release_pending(channel);
                 }
             }
             66 => {
@@ -560,6 +794,9 @@ impl Synthesizer {
                 self.channels[index].control_change(controller, value);
             }
         }
+        if self.font.has_cc_triggers {
+            self.controller_regions(index, controller, previous, value);
+        }
     }
 
     /// Releases the voices of `channel` that nothing holds any more.
@@ -572,6 +809,7 @@ impl Synthesizer {
                 && !voice.sostenuto
                 && !sustain
                 && !voice.is_released()
+                && !voice.one_shot
             {
                 voice.release();
             }
@@ -613,16 +851,22 @@ impl Synthesizer {
         let sustain = self.channels[channel as usize].sustain();
         for voice in self.voices.iter_mut().filter(|v| v.active && v.channel == channel) {
             voice.key_down = false;
-            if !sustain && !voice.sostenuto {
+            if !sustain && !voice.sostenuto && !voice.one_shot {
                 voice.release();
             }
         }
+        self.clear_keys(channel as usize);
+    }
+
+    fn clear_keys(&mut self, channel: usize) {
+        self.keys[channel * 128..channel * 128 + 128].fill(KeyState::default());
     }
 
     fn all_sound_off_channel(&mut self, channel: u8) {
         for voice in self.voices.iter_mut().filter(|v| v.active && v.channel == channel) {
             voice.kill();
         }
+        self.clear_keys(channel as usize);
     }
 
     /// Releases every note on every channel (ignoring the pedals).
@@ -645,6 +889,7 @@ impl Synthesizer {
         for voice in &mut self.voices {
             voice.active = false;
         }
+        self.keys.fill(KeyState::default());
         self.reset_midi_state(Mode::General);
         self.sysex.cancel();
         self.stream = ByteStream::default();
@@ -657,6 +902,7 @@ impl Synthesizer {
     /// System Exclusive messages set, without touching voices (used when a
     /// sequencer jumps).
     pub(crate) fn reset_channels(&mut self) {
+        self.keys.fill(KeyState::default());
         self.reset_midi_state(Mode::General);
     }
 
@@ -1078,6 +1324,7 @@ impl Synthesizer {
         if chorus.enabled {
             chorus.process(&chorus_send[..n], &mut left[..n], &mut right[..n]);
         }
+        self.frame += n as u64;
     }
 }
 

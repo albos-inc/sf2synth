@@ -1,10 +1,13 @@
 //! # sf2synth
 //!
-//! A real-time SF2 sample-based MIDI synthesizer and a MIDI file sequencer,
-//! in pure Rust with no dependencies and no `unsafe`.
+//! A real-time SF2 and SFZ sample-based MIDI synthesizer and a MIDI file
+//! sequencer, in pure Rust with no dependencies and no `unsafe`.
 //!
 //! - Follows SoundFont 2.04: every generator, preset/instrument layering,
 //!   the default modulators and the file's own modulators, 24-bit samples.
+//! - Reads DLS files, and SFZ instruments with WAV or FLAC samples
+//!   ([`SoundFont::open_sfz`]): release triggers, round robin, crossfades,
+//!   mute groups and controller-triggered regions included.
 //! - Real-time safe: after setup, rendering and MIDI handling never
 //!   allocate or lock.
 //! - Light: sample data is read in place from shared bytes, so a
@@ -43,11 +46,14 @@ mod dls;
 mod dsp;
 mod effects;
 mod error;
+mod flac;
 pub mod generator;
 mod limiter;
 mod midi_file;
 pub mod modulator;
 mod sequencer;
+mod sfz;
+mod sfz_writer;
 mod sinc;
 mod soundfont;
 mod synth;
@@ -60,6 +66,8 @@ pub use error::{Error, Result};
 pub use midi_file::{MidiEvent, MidiFile, TempoChange};
 pub use modulator::Modulator;
 pub use sequencer::Sequencer;
-pub use soundfont::{FileFormat, Instrument, Preset, SampleHeader, SharedBytes, SoundFont, SoundFontInfo, Zone};
+pub use soundfont::{
+    FileFormat, FileLoader, Instrument, Preset, SampleHeader, SharedBytes, SoundFont, SoundFontInfo, Zone,
+};
 pub use synth::{CHANNEL_COUNT, STEAL_FADE_VOICES, Synthesizer, SynthesizerSettings};
 pub use voice::Interpolation;

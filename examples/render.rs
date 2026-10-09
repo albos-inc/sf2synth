@@ -1,7 +1,7 @@
 //! Renders a MIDI file with an SF2 file to a WAV file.
 //!
 //! ```text
-//! cargo run --release --example render -- <font.sf2> <song.mid> <out.wav> [sample rate] [speed]
+//! cargo run --release --example render -- <font.sf2/.sfz> <song.mid> <out.wav> [sample rate] [speed]
 //! ```
 
 #[path = "common/wav.rs"]
@@ -15,14 +15,14 @@ use sf2synth::{MidiFile, Sequencer, SoundFont, Synthesizer, SynthesizerSettings}
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 4 {
-        eprintln!("usage: render <font.sf2> <song.mid> <out.wav> [sample rate] [speed]");
+        eprintln!("usage: render <font.sf2/.sfz> <song.mid> <out.wav> [sample rate] [speed]");
         std::process::exit(2);
     }
     let sample_rate: u32 = args.get(4).map(|s| s.parse()).transpose()?.unwrap_or(48_000);
     let speed: f64 = args.get(5).map(|s| s.parse()).transpose()?.unwrap_or(1.0);
 
     let loading = Instant::now();
-    let font = Arc::new(SoundFont::from_bytes(std::fs::read(&args[1])?)?);
+    let font = Arc::new(SoundFont::open(&args[1])?);
     let midi = Arc::new(MidiFile::from_bytes(&std::fs::read(&args[2])?)?);
     println!("loaded {} ({} presets) in {:.0?}", font.info().name, font.presets().len(), loading.elapsed());
 
