@@ -11,7 +11,11 @@
 use std::sync::Arc;
 
 use serde::Serialize;
+
+mod shared;
+
 use sf2synth::{FileFormat, MidiFile, Sequencer, SharedBytes, SoundFont, Synthesizer, SynthesizerSettings};
+pub use shared::{PlayerStatus, SharedPlayer};
 
 /// Where the transport is.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]

@@ -3,7 +3,7 @@ mod common;
 use std::sync::Arc;
 
 use common::*;
-use sf2synth::{SoundFont, Synthesizer, SynthesizerSettings};
+use sf2synth::{Interpolation, SoundFont, Synthesizer, SynthesizerSettings};
 
 fn synth_for(zones: &[TestZone]) -> Synthesizer {
     let font = Arc::new(SoundFont::from_bytes(sine_font(zones)).unwrap());
@@ -217,6 +217,30 @@ fn voices_are_stolen_when_all_are_busy() {
 }
 
 #[test]
+fn a_stolen_voice_fades_out_instead_of_clicking() {
+    let font = Arc::new(SoundFont::from_bytes(sine_font(&[looping_zone()])).unwrap());
+    let mut settings = SynthesizerSettings::new(SAMPLE_RATE);
+    settings.max_voices = 1;
+    settings.reverb.enabled = false;
+    settings.chorus.enabled = false;
+    let mut synth = Synthesizer::new(font, &settings).unwrap();
+    synth.note_on(0, 69, 100);
+    let before = render(&mut synth, 0.1);
+    let amplitude = before.iter().fold(0.0f32, |m, &x| m.max(x.abs()));
+    // A new note steals the only voice: the old one fades while the new one
+    // starts in a spare voice.
+    synth.note_on(0, 81, 100);
+    assert_eq!(synth.active_voice_count(), 2);
+    let after = render(&mut synth, 0.02);
+    let signal: Vec<f32> = before.iter().chain(&after).copied().collect();
+    let largest_step = signal.windows(2).fold(0.0f32, |m, w| m.max((w[1] - w[0]).abs()));
+    // Two sines (441 and 882 Hz) move at most 0.19 of their amplitude per
+    // sample; a cut would jump by up to a whole amplitude.
+    assert!(largest_step < 0.3 * amplitude, "{largest_step} vs {amplitude}");
+    assert_eq!(synth.active_voice_count(), 1);
+}
+
+#[test]
 fn reverb_adds_a_tail() {
     let font = Arc::new(SoundFont::from_bytes(sine_font(&[looping_zone()])).unwrap());
     let mut synth = Synthesizer::new(font, &SynthesizerSettings::new(SAMPLE_RATE)).unwrap();
@@ -268,4 +292,55 @@ fn rejects_bad_settings() {
     let mut settings = SynthesizerSettings::new(48000);
     settings.max_voices = 0;
     assert!(Synthesizer::new(font, &settings).is_err());
+}
+
+/// A font whose only sample is a sine at 0.4 of its sample rate (17.64 kHz
+/// at 44.1 kHz), recorded as key 60.
+fn bright_font() -> Arc<SoundFont> {
+    use sf2synth::writer::{InstrumentDef, PresetDef, SampleDef, Sf2Builder, ZoneDef};
+    let points = (0..44100).map(|i| ((i as f64 * 0.4 * std::f64::consts::TAU).sin() * 16000.0) as i16).collect();
+    let mut builder = Sf2Builder::new("Bright");
+    let sample = builder.add_sample(SampleDef::mono("Bright", points, SAMPLE_RATE, 60).looped(1000, 41000));
+    let instrument =
+        builder.add_instrument(InstrumentDef::new("Bright").zone(ZoneDef::sample(sample).generator(54, 1)));
+    builder.add_preset(PresetDef::new("Bright", 0, 0).zone(ZoneDef::instrument(instrument)));
+    Arc::new(SoundFont::from_bytes(builder.to_bytes()).unwrap())
+}
+
+fn play(font: &Arc<SoundFont>, interpolation: Interpolation, key: u8) -> Vec<f32> {
+    let mut settings = SynthesizerSettings::new(SAMPLE_RATE);
+    settings.reverb.enabled = false;
+    settings.chorus.enabled = false;
+    settings.interpolation = interpolation;
+    let mut synth = Synthesizer::new(font.clone(), &settings).unwrap();
+    synth.note_on(0, key, 127);
+    render(&mut synth, 0.1);
+    render(&mut synth, 0.5)
+}
+
+#[test]
+fn sinc_interpolation_removes_aliasing() {
+    let font = bright_font();
+    // At the recorded pitch both keep the 17.64 kHz tone.
+    let cubic = rms(&play(&font, Interpolation::Cubic, 60));
+    let sinc = rms(&play(&font, Interpolation::Sinc, 60));
+    assert!(sinc > cubic * 0.7, "{sinc} vs {cubic}");
+    // An octave up, 35.28 kHz folds back to 8.82 kHz: cubic lets it through,
+    // sinc removes it.
+    let cubic_alias = rms(&play(&font, Interpolation::Cubic, 72));
+    let sinc_alias = rms(&play(&font, Interpolation::Sinc, 72));
+    assert!(cubic_alias > cubic * 0.05, "{cubic_alias}");
+    assert!(sinc_alias < sinc * 0.01, "{sinc_alias} vs {sinc}");
+}
+
+#[test]
+fn sinc_interpolation_keeps_pitch_and_level() {
+    let font = Arc::new(SoundFont::from_bytes(sine_font(&[looping_zone()])).unwrap());
+    for key in [57, 69, 76, 81] {
+        let cubic = play(&font, Interpolation::Cubic, key);
+        let sinc = play(&font, Interpolation::Sinc, key);
+        let (f_cubic, f_sinc) = (frequency(&cubic, SAMPLE_RATE), frequency(&sinc, SAMPLE_RATE));
+        assert!((f_sinc - f_cubic).abs() < f_cubic * 0.001, "key {key}: {f_sinc} vs {f_cubic}");
+        assert!((rms(&sinc) / rms(&cubic) - 1.0).abs() < 0.01, "key {key}: {} vs {}", rms(&sinc), rms(&cubic));
+    }
 }

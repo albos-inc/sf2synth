@@ -22,7 +22,7 @@ bookmark), so a host's project reopens with the same sound.
 ## Setup
 
 In Xcode, *File → Add Package Dependencies…* with
-`https://github.com/albos-inc/sf2synth` (from version 0.2.0), and link the
+`https://github.com/albos-inc/sf2synth` (from version 0.3.0), and link the
 `SF2Synth` library. The package downloads the Rust library
 (`SF2SynthC.xcframework`) attached to the release.
 

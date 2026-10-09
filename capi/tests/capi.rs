@@ -78,6 +78,10 @@ fn loads_and_plays() {
             sf2synth_ump(synth, [0x2090_4564u32].as_ptr(), 1);
             sf2synth_set_channel_drum(synth, 3, true);
             sf2synth_set_reverb_enabled(synth, true);
+            sf2synth_set_interpolation(synth, 2);
+            sf2synth_ump(synth, [0x2090_4564u32].as_ptr(), 1);
+            sf2synth_render(synth, left.as_mut_ptr(), right.as_mut_ptr(), frames);
+            assert!(left.iter().all(|x| x.is_finite()));
             assert!(sf2synth_set_sample_rate(synth, 48000));
             assert_eq!(sf2synth_sample_rate(synth), 48000);
             assert!(!sf2synth_set_sample_rate(synth, 1));

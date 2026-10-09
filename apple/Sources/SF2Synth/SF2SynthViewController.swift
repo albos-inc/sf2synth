@@ -46,7 +46,7 @@ open class SF2SynthViewController: AUViewController, AUAudioUnitFactory {
         #endif
         view.addSubview(controller.view)
         hosted = controller
-        preferredContentSize = CGSize(width: 400, height: 260)
+        preferredContentSize = CGSize(width: 400, height: 300)
     }
 }
 
@@ -95,6 +95,10 @@ public struct SF2SynthView: View {
                 }
                 Toggle("Reverb", isOn: $model.reverb)
                 Toggle("Chorus", isOn: $model.chorus)
+                Picker("Quality", selection: $model.interpolation) {
+                    Text("Standard").tag(SF2SynthAudioUnit.Interpolation.cubic)
+                    Text("High").tag(SF2SynthAudioUnit.Interpolation.sinc)
+                }
             }
         }
         .formStyle(.grouped)
@@ -117,6 +121,9 @@ public struct SF2SynthView: View {
         @Published var gain: Float { didSet { audioUnit.masterGain = gain } }
         @Published var reverb: Bool { didSet { audioUnit.isReverbEnabled = reverb } }
         @Published var chorus: Bool { didSet { audioUnit.isChorusEnabled = chorus } }
+        @Published var interpolation: SF2SynthAudioUnit.Interpolation {
+            didSet { audioUnit.interpolation = interpolation }
+        }
 
         init(audioUnit: SF2SynthAudioUnit) {
             self.audioUnit = audioUnit
@@ -124,6 +131,7 @@ public struct SF2SynthView: View {
             gain = audioUnit.masterGain
             reverb = audioUnit.isReverbEnabled
             chorus = audioUnit.isChorusEnabled
+            interpolation = audioUnit.interpolation == .linear ? .cubic : audioUnit.interpolation
             observer = audioUnit.parameterTree?.token(byAddingParameterObserver: { [weak self] address, value in
                 DispatchQueue.main.async { self?.update(address, value) }
             })

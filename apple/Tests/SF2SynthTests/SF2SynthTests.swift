@@ -131,6 +131,7 @@ final class SF2SynthTests: XCTestCase {
         let first = try SF2SynthInstrument(soundFont: url)
         first.synth.masterGain = 0.7
         first.synth.isReverbEnabled = false
+        first.synth.interpolation = .sinc
         let state = first.synth.fullState
 
         let second = try SF2SynthInstrument()
@@ -139,6 +140,7 @@ final class SF2SynthTests: XCTestCase {
         XCTAssertEqual(second.synth.masterGain, 0.7)
         XCTAssertFalse(second.synth.isReverbEnabled)
         XCTAssertTrue(second.synth.isChorusEnabled)
+        XCTAssertEqual(second.synth.interpolation, .sinc)
         XCTAssertEqual(second.synth.soundFontURL?.standardizedFileURL.path, url.standardizedFileURL.path)
         let (engine, _) = try engine(with: second)
         second.startNote(60, withVelocity: 100, onChannel: 0)

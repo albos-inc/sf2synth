@@ -146,14 +146,14 @@ impl PlayerApp {
             let Ok(output) = &self.output else { continue };
             match loaded {
                 Loaded::SoundFont(path, Ok(font)) => {
-                    let previous = output.player().set_sound_font(*font);
+                    let previous = output.player().with(|p| p.set_sound_font(*font));
                     // The old SF2 is freed here, outside the audio lock.
                     drop(previous);
                     self.sound_font_path = Some(path);
                     self.error = None;
                 }
                 Loaded::Song(_, Ok(song)) => {
-                    let previous = output.player().set_song(song);
+                    let previous = output.player().with(|p| p.set_song(song));
                     drop(previous);
                     self.autoplay = true;
                     self.error = None;
@@ -162,12 +162,9 @@ impl PlayerApp {
                     self.error = Some(format!("{}: {e}", file_name(&path)));
                 }
             }
-            if self.autoplay && self.loading == 0 {
-                let mut player = output.player();
-                if player.can_play() {
-                    player.play();
-                    self.autoplay = false;
-                }
+            if self.autoplay && self.loading == 0 && output.player().status().can_play {
+                output.player().with(|p| p.play());
+                self.autoplay = false;
             }
         }
     }
@@ -178,7 +175,7 @@ impl PlayerApp {
             self.open(file.path().to_path_buf());
         }
         if space && let Ok(output) = &self.output {
-            output.player().toggle();
+            output.player().with(|p| p.toggle());
         }
     }
 }
@@ -220,19 +217,11 @@ impl eframe::App for PlayerApp {
             }
         };
 
-        // A snapshot of the player, so the lock isn't held while drawing.
-        let (state, can_play, position, duration, voices, song, font) = {
-            let player = output.player();
-            (
-                player.state(),
-                player.can_play(),
-                player.position(),
-                player.duration(),
-                player.active_voices(),
-                player.song().cloned(),
-                player.sound_font().cloned(),
-            )
-        };
+        // Read without the player's lock: drawing never holds up the audio.
+        let status = output.player().status();
+        let (state, can_play, position, duration, voices) =
+            (status.state, status.can_play, status.position, status.duration, status.active_voices);
+        let (song, font) = (output.player().song(), output.player().sound_font());
 
         let mut command = None;
         egui::CentralPanel::default().show(ui, |ui| {
@@ -372,9 +361,9 @@ impl eframe::App for PlayerApp {
         });
 
         match command {
-            Some(Command::Toggle) => output.player().toggle(),
-            Some(Command::Stop) => output.player().stop(),
-            Some(Command::Seek(to)) => output.player().seek(to),
+            Some(Command::Toggle) => output.player().with(|p| p.toggle()),
+            Some(Command::Stop) => output.player().with(|p| p.stop()),
+            Some(Command::Seek(to)) => output.player().with(|p| p.seek(to)),
             None => {}
         }
 

@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.3.0 (2026-10-09)
+
+Faster, cleaner, steadier.
+
+- About twice as fast: sample points are read in place once per block
+  (instead of through a dynamic call per point), mostly without bounds or
+  loop checks, in one loop per interpolation method. Output is unchanged.
+- An idle reverb and chorus are skipped: a synthesizer with nothing
+  sounding costs about a seventh of what it did.
+- `Interpolation::Sinc`: 32-point windowed sinc, band-limited to the pitch,
+  so samples played higher than recorded don't alias (also
+  `sf2synth_set_interpolation` and `SF2SynthAudioUnit.interpolation`, and a
+  quality choice in `SF2SynthView`). `Interpolation` is now
+  `#[non_exhaustive]`.
+- Voice stealing fades the stolen voice out (5 ms) instead of cutting it,
+  which clicked; up to `STEAL_FADE_VOICES` voices beyond `max_voices` may
+  be fading.
+- A moving filter cutoff (modulation envelope or LFO) follows its course
+  through each block instead of jumping once a block: less zipper noise.
+- Robustness tests: thousands of damaged SF2, DLS and MIDI files, extreme
+  generators and modulators, random MIDI bytes, SysEx and UMP — no panic,
+  no NaN.
+- Sample player: `SharedPlayer` (core) publishes the state, position and
+  voices in atomics, so the UI's frequent reads no longer take the lock the
+  audio callback tries (which could drop a buffer); the Windows app and the
+  iOS/macOS/Android FFI use it.
+- AUv3: replacing the SoundFont while rendering releases the previous one's
+  file at once.
+
 ## 0.2.0 (2026-10-09)
 
 - GS and XG part parameters by SysEx: program (GS tone number, XG bank and

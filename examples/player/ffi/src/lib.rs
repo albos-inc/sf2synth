@@ -1,48 +1,35 @@
 //! The player for Swift and Kotlin: a C interface (`include/sf2player.h`)
 //! and, on Android, JNI functions for `jp.albos.sf2player.NativePlayer`.
 //!
-//! The player sits behind a mutex. The audio callback only ever tries the
-//! lock (and plays silence for that buffer if the UI holds it), and files are
-//! parsed before the lock is taken, so loading never stalls the audio.
+//! The player is a [`SharedPlayer`]: the audio callback only ever tries its
+//! lock (and plays silence for that buffer if the UI holds it), the UI's
+//! frequent reads of the position and state take no lock at all, and files
+//! are parsed before the lock is taken, so loading never stalls the audio.
 
 use std::ffi::{CStr, CString, c_char};
-use std::sync::{Mutex, MutexGuard};
 
-use sf2player::{LoadedSong, LoadedSoundFont, Player};
+use sf2player::{LoadedSong, LoadedSoundFont, Player, SharedPlayer};
 
 #[cfg(target_os = "android")]
 mod android;
 
 /// The `Sf2Player` handle.
 pub struct Handle {
-    inner: Mutex<Inner>,
-}
-
-struct Inner {
-    player: Player,
-    /// Scratch buffers for interleaved rendering.
-    left: Vec<f32>,
-    right: Vec<f32>,
+    shared: SharedPlayer,
 }
 
 impl Handle {
     fn new(sample_rate: u32) -> Handle {
-        let inner = Inner { player: Player::new(sample_rate), left: Vec::new(), right: Vec::new() };
-        Handle { inner: Mutex::new(inner) }
-    }
-
-    fn lock(&self) -> MutexGuard<'_, Inner> {
-        self.inner.lock().unwrap_or_else(|e| e.into_inner())
+        Handle { shared: SharedPlayer::new(sample_rate) }
     }
 
     fn with<T>(&self, f: impl FnOnce(&mut Player) -> T) -> T {
-        f(&mut self.lock().player)
+        self.shared.with(f)
     }
 
     /// Loads an SF2 (or DLS) file, memory-mapped.
     fn load_sound_font(&self, file: &std::fs::File, file_name: &str) -> Result<(), String> {
-        let sample_rate = self.with(|p| p.sample_rate());
-        let loaded = LoadedSoundFont::open(file, file_name, sample_rate)?;
+        let loaded = LoadedSoundFont::open(file, file_name, self.shared.sample_rate())?;
         let previous = self.with(|p| p.set_sound_font(loaded));
         drop(previous);
         Ok(())
@@ -56,45 +43,21 @@ impl Handle {
     }
 
     fn info_json(&self) -> String {
-        self.with(|p| {
-            let info = serde_json::json!({ "sound_font": p.sound_font(), "song": p.song() });
-            info.to_string()
-        })
+        let info = serde_json::json!({ "sound_font": self.shared.sound_font(), "song": self.shared.song() });
+        info.to_string()
     }
 
     /// Renders into separate channels; false (and silence) if the UI holds
     /// the lock.
     fn render(&self, left: &mut [f32], right: &mut [f32]) -> bool {
-        match self.inner.try_lock() {
-            Ok(mut inner) => {
-                inner.player.render(left, right);
-                true
-            }
-            Err(_) => {
-                left.fill(0.0);
-                right.fill(0.0);
-                false
-            }
-        }
+        self.shared.render(left, right)
     }
 
     /// Renders `output.len() / 2` interleaved stereo frames; false (leaving
     /// `output` untouched) if the UI holds the lock.
     #[cfg_attr(not(target_os = "android"), allow(dead_code))]
     fn render_interleaved(&self, output: &mut [f32]) -> bool {
-        let Ok(mut inner) = self.inner.try_lock() else { return false };
-        let frames = output.len() / 2;
-        let Inner { player, left, right } = &mut *inner;
-        if left.len() < frames {
-            left.resize(frames, 0.0);
-            right.resize(frames, 0.0);
-        }
-        player.render(&mut left[..frames], &mut right[..frames]);
-        for (i, frame) in output.chunks_exact_mut(2).enumerate() {
-            frame[0] = left[i];
-            frame[1] = right[i];
-        }
-        true
+        self.shared.render_interleaved(output)
     }
 }
 
@@ -190,35 +153,35 @@ pub unsafe extern "C" fn sf2player_seek(player: *const Handle, seconds: f64) {
 /// `player` must be live.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sf2player_state(player: *const Handle) -> i32 {
-    unsafe { handle(player) }.with(|p| p.state().code())
+    unsafe { handle(player) }.shared.status().state.code()
 }
 
 /// # Safety
 /// `player` must be live.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sf2player_can_play(player: *const Handle) -> bool {
-    unsafe { handle(player) }.with(|p| p.can_play())
+    unsafe { handle(player) }.shared.status().can_play
 }
 
 /// # Safety
 /// `player` must be live.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sf2player_position(player: *const Handle) -> f64 {
-    unsafe { handle(player) }.with(|p| p.position())
+    unsafe { handle(player) }.shared.status().position
 }
 
 /// # Safety
 /// `player` must be live.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sf2player_duration(player: *const Handle) -> f64 {
-    unsafe { handle(player) }.with(|p| p.duration())
+    unsafe { handle(player) }.shared.status().duration
 }
 
 /// # Safety
 /// `player` must be live.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sf2player_active_voices(player: *const Handle) -> u32 {
-    unsafe { handle(player) }.with(|p| p.active_voices() as u32)
+    unsafe { handle(player) }.shared.status().active_voices as u32
 }
 
 /// # Safety

@@ -87,6 +87,21 @@ public final class SF2SynthAudioUnit: AUAudioUnit {
     /// A security-scoped URL being accessed while its file plays.
     private var accessedURL: URL?
 
+    /// How sample points are interpolated (real-time safe to change).
+    public enum Interpolation: Int32, Sendable {
+        case linear = 0
+        /// The default.
+        case cubic = 1
+        /// Band-limited: no aliasing when samples play higher than
+        /// recorded, at about 1.5–2× the rendering time.
+        case sinc = 2
+    }
+
+    public var interpolation: Interpolation {
+        get { kernel.settings.withLock { Interpolation(rawValue: $0.interpolation) ?? .cubic } }
+        set { kernel.settings.withLock { $0.interpolation = newValue.rawValue; $0.version &+= 1 } }
+    }
+
     /// Voices that can sound at once; takes effect at the next
     /// ``loadSoundFont(at:mapped:)`` or when render resources are allocated
     /// without a synth.
@@ -214,6 +229,7 @@ public final class SF2SynthAudioUnit: AUAudioUnit {
                 "reverb": isReverbEnabled,
                 "chorus": isChorusEnabled,
                 "mapped": isSoundFontMapped,
+                "interpolation": interpolation.rawValue,
             ]
             if let url = soundFontURL {
                 synth["soundFontPath"] = url.path
@@ -228,6 +244,9 @@ public final class SF2SynthAudioUnit: AUAudioUnit {
             if let gain = synth["masterGain"] as? Float { masterGain = gain }
             if let reverb = synth["reverb"] as? Bool { isReverbEnabled = reverb }
             if let chorus = synth["chorus"] as? Bool { isChorusEnabled = chorus }
+            if let value = synth["interpolation"] as? Int32, let interpolation = Interpolation(rawValue: value) {
+                self.interpolation = interpolation
+            }
             let mapped = synth["mapped"] as? Bool ?? true
             let bookmarked = (synth["soundFontBookmark"] as? Data).flatMap(Self.resolve(bookmark:))
             let path = (synth["soundFontPath"] as? String).map { URL(fileURLWithPath: $0) }
@@ -291,6 +310,7 @@ private final class Kernel {
         var masterGain: Float = 1
         var reverb = true
         var chorus = true
+        var interpolation = SF2SynthAudioUnit.Interpolation.cubic.rawValue
         var version = 0
     }
 
@@ -341,9 +361,14 @@ private final class Kernel {
             synth = nil
             return
         }
-        let newSynth = makeSynth(font: newFont, sampleRate: sampleRate, maximumVoices: maximumVoices)
-        sf2synth_font_free(newFont) // the synth keeps it
-        guard let newSynth else { return }
+        guard let newSynth = makeSynth(font: newFont, sampleRate: sampleRate, maximumVoices: maximumVoices) else {
+            sf2synth_font_free(newFont)
+            return
+        }
+        // The render thread never reads `font`: the old one goes now (its
+        // synth keeps it alive until it's retired).
+        sf2synth_font_free(font)
+        font = newFont
         let handed = SynthPointer(pointer: newSynth)
         let replaced = handover.withLock { state -> [SynthPointer?] in
             let replaced = [state.incoming, state.retired]
@@ -527,6 +552,7 @@ private final class Kernel {
         sf2synth_set_master_gain(synth, current.masterGain)
         sf2synth_set_reverb_enabled(synth, current.reverb)
         sf2synth_set_chorus_enabled(synth, current.chorus)
+        sf2synth_set_interpolation(synth, current.interpolation)
         appliedVersion = current.version
     }
 }

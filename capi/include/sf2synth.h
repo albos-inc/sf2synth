@@ -132,6 +132,14 @@ void sf2synth_reset(Sf2Synth *synth);
 
 // Setters (real-time safe).
 void sf2synth_set_master_gain(Sf2Synth *synth, float gain);
+
+// sf2synth_set_interpolation
+#define SF2SYNTH_INTERPOLATION_LINEAR 0
+#define SF2SYNTH_INTERPOLATION_CUBIC 1
+// 32-point windowed sinc, band-limited to the pitch: no aliasing when a
+// sample plays higher than recorded. About 1.5–2× the rendering time.
+#define SF2SYNTH_INTERPOLATION_SINC 2
+void sf2synth_set_interpolation(Sf2Synth *synth, int32_t interpolation);
 void sf2synth_set_reverb_enabled(Sf2Synth *synth, bool enabled);
 void sf2synth_set_chorus_enabled(Sf2Synth *synth, bool enabled);
 // Makes a channel (0…15) play drum kits (bank 128) or melodic presets, until

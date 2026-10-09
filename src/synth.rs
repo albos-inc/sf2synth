@@ -13,13 +13,19 @@ use crate::voice::{BLOCK, Buses, Interpolation, Voice, VoiceStart};
 /// Number of MIDI channels.
 pub const CHANNEL_COUNT: usize = 16;
 
+/// Voices kept, beyond [`SynthesizerSettings::max_voices`], for those fading
+/// out after being stolen.
+pub const STEAL_FADE_VOICES: usize = 32;
+
 /// Settings of a [`Synthesizer`].
 #[derive(Clone, Debug)]
 pub struct SynthesizerSettings {
     /// Output sample rate, 8000…192000 Hz.
     pub sample_rate: u32,
     /// Voices that can sound at once. A piano with the sustain pedal down
-    /// can use well over a hundred.
+    /// can use well over a hundred. Beyond them, the voice that matters
+    /// least is faded out in a few milliseconds (instead of cut, which
+    /// clicks), so up to [`STEAL_FADE_VOICES`] more can still be fading.
     pub max_voices: usize,
     pub interpolation: Interpolation,
     /// The drum channel after a reset (bank 128), 0-based: 9 is General
@@ -122,6 +128,7 @@ pub struct Synthesizer {
     default_modulators: Vec<Modulator>,
     release_same_key: bool,
     drum_channel: Option<u8>,
+    max_voices: usize,
     channels: Vec<Channel>,
     voices: Vec<Voice>,
     next_note_id: u64,
@@ -150,6 +157,8 @@ pub struct Synthesizer {
 impl Synthesizer {
     pub fn new(font: Arc<SoundFont>, settings: &SynthesizerSettings) -> Result<Synthesizer> {
         check_sample_rate(settings.sample_rate)?;
+        // Built here, not on the audio thread at the first sinc voice.
+        crate::sinc::SincTable::shared();
         if settings.max_voices == 0 || settings.max_voices > 4096 {
             return Err(Error::InvalidSettings(format!("max voices {} is not in 1…4096", settings.max_voices)));
         }
@@ -164,7 +173,8 @@ impl Synthesizer {
             release_same_key: settings.release_same_key,
             drum_channel: settings.drum_channel,
             channels: (0..CHANNEL_COUNT).map(|i| Channel::new(settings.drum_channel == Some(i as u8))).collect(),
-            voices: (0..settings.max_voices).map(|_| Voice::default()).collect(),
+            max_voices: settings.max_voices,
+            voices: (0..settings.max_voices + STEAL_FADE_VOICES).map(|_| Voice::default()).collect(),
             next_note_id: 0,
             left: [0.0; BLOCK],
             right: [0.0; BLOCK],
@@ -408,23 +418,44 @@ impl Synthesizer {
         }
     }
 
-    /// A free voice, or the one that matters least.
-    fn allocate_voice(&self, note_id: u64) -> usize {
+    /// A voice for a new note (of `note_id`). With `max_voices` sounding,
+    /// the one that matters least is faded out to make room, and the new
+    /// note takes a spare voice; only when every spare one is fading too is
+    /// the quietest of those cut.
+    fn allocate_voice(&mut self, note_id: u64) -> usize {
+        let sounding = self.voices.iter().filter(|v| v.active && !v.is_killed()).count();
+        if sounding >= self.max_voices {
+            let mut victim = None;
+            let mut lowest = (f32::INFINITY, u64::MAX);
+            for (i, voice) in self.voices.iter().enumerate() {
+                if !voice.active || voice.is_killed() || voice.note_id == note_id {
+                    continue;
+                }
+                let rank = (voice.priority(), voice.note_id);
+                if rank.0 < lowest.0 || (rank.0 == lowest.0 && rank.1 < lowest.1) {
+                    victim = Some(i);
+                    lowest = rank;
+                }
+            }
+            if let Some(victim) = victim {
+                self.voices[victim].kill();
+            }
+        }
         if let Some(free) = self.voices.iter().position(|v| !v.active) {
             return free;
         }
+        // Every voice busy: cut the quietest fading one (or any other).
         let mut best = 0;
-        let mut best_priority = f32::INFINITY;
-        let mut best_age = u64::MAX;
+        let mut lowest = (f32::INFINITY, u64::MAX);
         for (i, voice) in self.voices.iter().enumerate() {
             if voice.note_id == note_id {
                 continue;
             }
-            let priority = voice.priority();
-            if priority < best_priority || (priority == best_priority && voice.note_id < best_age) {
+            // Fading voices first, the quietest of them first.
+            let rank = (if voice.is_killed() { voice.priority() - 2.0 } else { voice.priority() }, voice.note_id);
+            if rank.0 < lowest.0 || (rank.0 == lowest.0 && rank.1 < lowest.1) {
                 best = i;
-                best_priority = priority;
-                best_age = voice.note_id;
+                lowest = rank;
             }
         }
         best

@@ -121,11 +121,23 @@ pub(crate) struct Reverb {
     wet1: f32,
     wet2: f32,
     pub enabled: bool,
+    /// Frames of silent input in a row, and the count after which the
+    /// network has emptied (every delay line has passed its contents on).
+    silent_frames: usize,
+    settle_frames: usize,
+    /// Silent in and out: processing is skipped.
+    idle: bool,
 }
+
+/// Output below which a reverb with silent input counts as finished
+/// (−140 dB).
+const REVERB_IDLE_LEVEL: f32 = 1e-7;
 
 impl Reverb {
     pub fn new(sample_rate: f32, settings: &ReverbSettings) -> Reverb {
         let scale = |length: usize| (length as f32 * sample_rate / 44100.0).round() as usize;
+        let longest = scale(COMB_LENGTHS[7] + STEREO_SPREAD)
+            + ALLPASS_LENGTHS.iter().map(|&l| scale(l + STEREO_SPREAD)).sum::<usize>();
         let mut reverb = Reverb {
             combs_left: COMB_LENGTHS.iter().map(|&l| Comb::new(scale(l))).collect(),
             combs_right: COMB_LENGTHS.iter().map(|&l| Comb::new(scale(l + STEREO_SPREAD))).collect(),
@@ -137,6 +149,9 @@ impl Reverb {
             wet1: 0.0,
             wet2: 0.0,
             enabled: true,
+            silent_frames: 0,
+            settle_frames: 2 * longest,
+            idle: true,
         };
         reverb.configure(settings);
         reverb
@@ -158,11 +173,25 @@ impl Reverb {
         self.combs_right.iter_mut().for_each(Comb::clear);
         self.allpasses_left.iter_mut().for_each(AllPass::clear);
         self.allpasses_right.iter_mut().for_each(AllPass::clear);
+        self.silent_frames = 0;
+        self.idle = true;
     }
 
-    /// Adds the reverb of `input` to `left` and `right`.
+    /// Adds the reverb of `input` to `left` and `right`. Once the input has
+    /// been silent long enough for the tail to die away, nothing is done
+    /// until it sounds again.
     pub fn process(&mut self, input: &[f32], left: &mut [f32], right: &mut [f32]) {
+        if input.iter().all(|&x| x == 0.0) {
+            if self.idle {
+                return;
+            }
+            self.silent_frames += input.len();
+        } else {
+            self.silent_frames = 0;
+            self.idle = false;
+        }
         let (feedback, damp1, damp2) = (self.feedback, self.damp1, self.damp2);
+        let mut peak = 0.0f32;
         for i in 0..input.len() {
             let x = input[i] * INPUT_GAIN;
             let mut out_left = 0.0;
@@ -181,6 +210,11 @@ impl Reverb {
             }
             left[i] += out_left * self.wet1 + out_right * self.wet2;
             right[i] += out_right * self.wet1 + out_left * self.wet2;
+            peak = peak.max(out_left.abs()).max(out_right.abs());
+        }
+        if self.silent_frames > self.settle_frames && peak < REVERB_IDLE_LEVEL {
+            // Start the next sound from clean lines.
+            self.clear();
         }
     }
 }
@@ -194,6 +228,9 @@ pub(crate) struct Chorus {
     depth: f32,
     level: f32,
     pub enabled: bool,
+    /// Frames of silent input in a row: once they fill the delay line, the
+    /// output is silent and processing is skipped.
+    silent_frames: usize,
 }
 
 impl Chorus {
@@ -209,6 +246,7 @@ impl Chorus {
             depth: 0.0,
             level: 0.0,
             enabled: true,
+            silent_frames: usize::MAX,
         };
         chorus.configure(sample_rate, settings);
         chorus
@@ -224,6 +262,7 @@ impl Chorus {
 
     pub fn clear(&mut self) {
         self.buffer.fill(0.0);
+        self.silent_frames = usize::MAX;
     }
 
     #[inline]
@@ -241,6 +280,23 @@ impl Chorus {
     /// quarter of a cycle apart).
     pub fn process(&mut self, input: &[f32], left: &mut [f32], right: &mut [f32]) {
         let length = self.buffer.len();
+        if input.iter().all(|&x| x == 0.0) {
+            if self.silent_frames >= length {
+                // Only zeros in the line: keep its time and modulation going
+                // (step by step, to land where processing would have).
+                self.write = (self.write + input.len()) % length;
+                for _ in 0..input.len() {
+                    self.phase += self.phase_step;
+                    if self.phase >= 1.0 {
+                        self.phase -= 1.0;
+                    }
+                }
+                return;
+            }
+            self.silent_frames = self.silent_frames.saturating_add(input.len());
+        } else {
+            self.silent_frames = 0;
+        }
         for i in 0..input.len() {
             self.buffer[self.write] = input[i];
             let angle = 2.0 * core::f32::consts::PI * self.phase;

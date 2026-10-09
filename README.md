@@ -17,7 +17,9 @@ tuned for faithful piano reproduction.
   wave samples and loops, and articulation (envelopes, LFOs, filter,
   velocity and key scaling) translated to SF2 parameters.
 - **Piano details.** Sustain and sostenuto pedals, re-striking a key releases
-  its previous strike, 4-point cubic interpolation, click-free gain ramps.
+  its previous strike, 4-point cubic interpolation (or band-limited 32-point
+  sinc, free of aliasing), click-free gain ramps, filter sweeps and voice
+  stealing.
 - **GM, GS and XG.** System Exclusive messages: GM / GM2 System On, GS
   Reset, XG System On, master volume, tuning and key shift, GS and XG part
   parameters (program, level, pan, effect sends, key shift, drum parts), GS
@@ -52,7 +54,7 @@ Android, Windows and macOS, with
 
 ```toml
 [dependencies]
-sf2synth = { git = "https://github.com/albos-inc/sf2synth", tag = "v0.2.0" }
+sf2synth = { git = "https://github.com/albos-inc/sf2synth", tag = "v0.3.0" }
 ```
 
 ```rust
@@ -151,7 +153,7 @@ Without another dependency, [`sf2synth-mmap`](mmap) maps a file with the
 system's own `mmap` (Unix) or file mapping (Windows):
 
 ```toml
-sf2synth-mmap = { git = "https://github.com/albos-inc/sf2synth", tag = "v0.2.0" }
+sf2synth-mmap = { git = "https://github.com/albos-inc/sf2synth", tag = "v0.3.0" }
 ```
 
 ```rust
@@ -224,15 +226,21 @@ cargo run --release --example render -- piano.sf2 song.mid song.wav
 
 ## Performance
 
-With [YDP Grand Piano](https://freepats.zenvoid.org/Piano/acoustic-grand-piano.html)
-(118 MB) on an Apple M-series core: loading takes 15–40 ms, and rendering
-piano pieces at 48 kHz runs about 100–160× faster than real time.
+On one Apple M-series core, rendering at 48 kHz with reverb and chorus:
+
+| SoundFont | Music | Cubic | Sinc |
+|---|---|---|---|
+| [YDP Grand Piano](https://freepats.zenvoid.org/Piano/acoustic-grand-piano.html) (118 MB) | Chopin, piano | 140× real time | 87× |
+| GeneralUser GS (32 MB) | GS song, 60 voices | 56× | 30× |
+
+Loading YDP takes 15–40 ms (or nothing much when memory-mapped). With no
+sound playing, the reverb and chorus stop computing, so an idle synthesizer
+costs almost nothing.
 
 ## Roadmap
 
 - Half-pedaling and the soft pedal
 - Polyphonic aftertouch as a modulator source
-- Windowed-sinc interpolation
 - SIMD voice mixing
 - Sympathetic string resonance for piano
 

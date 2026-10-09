@@ -109,27 +109,27 @@ pub extern "system" fn Java_jp_albos_sf2player_NativePlayer_seek(
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_jp_albos_sf2player_NativePlayer_state(_: JNIEnv, _: JClass, player: jlong) -> jint {
-    handle(player).with(|p| p.state().code())
+    handle(player).shared.status().state.code()
 }
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_jp_albos_sf2player_NativePlayer_canPlay(_: JNIEnv, _: JClass, player: jlong) -> jboolean {
-    if handle(player).with(|p| p.can_play()) { JNI_TRUE } else { JNI_FALSE }
+    if handle(player).shared.status().can_play { JNI_TRUE } else { JNI_FALSE }
 }
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_jp_albos_sf2player_NativePlayer_position(_: JNIEnv, _: JClass, player: jlong) -> jdouble {
-    handle(player).with(|p| p.position())
+    handle(player).shared.status().position
 }
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_jp_albos_sf2player_NativePlayer_duration(_: JNIEnv, _: JClass, player: jlong) -> jdouble {
-    handle(player).with(|p| p.duration())
+    handle(player).shared.status().duration
 }
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_jp_albos_sf2player_NativePlayer_activeVoices(_: JNIEnv, _: JClass, player: jlong) -> jint {
-    handle(player).with(|p| p.active_voices() as jint)
+    handle(player).shared.status().active_voices as jint
 }
 
 #[unsafe(no_mangle)]

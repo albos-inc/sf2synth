@@ -364,6 +364,18 @@ pub unsafe extern "C" fn sf2synth_set_master_gain(synth: *mut Synth, gain: f32) 
 /// # Safety
 /// See [`with`].
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn sf2synth_set_interpolation(synth: *mut Synth, interpolation: i32) {
+    let interpolation = match interpolation {
+        0 => Interpolation::Linear,
+        2 => Interpolation::Sinc,
+        _ => Interpolation::Cubic,
+    };
+    unsafe { with(synth, |s| s.set_interpolation(interpolation)) }
+}
+
+/// # Safety
+/// See [`with`].
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn sf2synth_set_reverb_enabled(synth: *mut Synth, enabled: bool) {
     unsafe {
         with(synth, |s| {

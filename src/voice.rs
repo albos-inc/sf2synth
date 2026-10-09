@@ -7,7 +7,8 @@ use crate::dsp::{
 };
 use crate::generator::{self as g, PARAM_COUNT};
 use crate::modulator::{self, Modulator, SourceInput};
-use crate::soundfont::{SampleData, SampleHeader, Zone};
+use crate::sinc::{self, SincTable};
+use crate::soundfont::{Points, SampleData, SampleHeader, Zone};
 
 /// Frames rendered per control-rate step.
 pub(crate) const BLOCK: usize = 64;
@@ -15,6 +16,13 @@ pub(crate) const BLOCK: usize = 64;
 const MAX_MODULATORS: usize = 64;
 /// Shortest release, to avoid clicks.
 const MIN_RELEASE_SECONDS: f32 = 0.002;
+// `Voice::generate_with` methods.
+const LINEAR: u8 = 0;
+const CUBIC: u8 = 1;
+const SINC: u8 = 2;
+
+/// Steps a block's filter cutoff changes in, when it moves.
+const FILTER_STEPS: usize = 4;
 /// How long a voice cut off by an exclusive class or All Sound Off fades.
 pub(crate) const KILL_SECONDS: f32 = 0.005;
 
@@ -25,12 +33,17 @@ const FRACTION_SCALE: f32 = 1.0 / (1u64 << FRACTION_BITS) as f32;
 /// How sample points are interpolated when a sample is played at another
 /// pitch or rate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum Interpolation {
     /// 2-point linear: cheapest, some aliasing and dulling.
     Linear,
     /// 4-point cubic Hermite: clean for piano at a small cost.
     #[default]
     Cubic,
+    /// 32-point windowed sinc, band-limited to the pitch: no aliasing when
+    /// a sample plays higher than recorded (up to two octaves). About 1.5–2×
+    /// the rendering time of cubic.
+    Sinc,
 }
 
 /// What a voice is started with.
@@ -68,6 +81,8 @@ pub(crate) struct Voice {
     pub sostenuto: bool,
     pub exclusive_class: i16,
     released: bool,
+    /// Fading out fast (stolen, cut by an exclusive class or All Sound Off).
+    killed: bool,
 
     /// Key and velocity the modulators and key scaling see.
     mod_key: u8,
@@ -113,6 +128,7 @@ impl Default for Voice {
             sostenuto: false,
             exclusive_class: 0,
             released: false,
+            killed: false,
             mod_key: 0,
             mod_velocity: 0,
             start: 0,
@@ -153,6 +169,7 @@ impl Voice {
         self.key_down = true;
         self.sostenuto = false;
         self.released = false;
+        self.killed = false;
         self.exclusive_class = instrument.get(g::EXCLUSIVE_CLASS).unwrap_or(0);
 
         let keynum = instrument.get(g::KEYNUM).unwrap_or(-1);
@@ -322,9 +339,15 @@ impl Voice {
 
     /// Fades out in a few milliseconds.
     pub fn kill(&mut self) {
+        self.killed = true;
         self.released = true;
         self.key_down = false;
         self.volume_envelope.kill(KILL_SECONDS);
+    }
+
+    /// Whether the voice is fading out fast (see [`kill`](Self::kill)).
+    pub fn is_killed(&self) -> bool {
+        self.killed
     }
 
     /// How much the voice matters, for voice stealing (lower goes first).
@@ -366,7 +389,7 @@ impl Voice {
         let cutoff = p[g::INITIAL_FILTER_FC as usize]
             + p[g::MOD_LFO_TO_FILTER_FC as usize] * modulation_lfo
             + p[g::MOD_ENV_TO_FILTER_FC as usize] * modulation_envelope;
-        self.filter.set(cutoff, p[g::INITIAL_FILTER_Q as usize], sample_rate);
+        let resonance = p[g::INITIAL_FILTER_Q as usize];
 
         let attenuation = p[g::INITIAL_ATTENUATION as usize] - p[g::MOD_LFO_TO_VOLUME as usize] * modulation_lfo;
         let pan = (p[g::PAN as usize] / 1000.0).clamp(-0.5, 0.5);
@@ -379,14 +402,30 @@ impl Voice {
         self.modulation_envelope.advance(dt);
         self.modulation_lfo.advance(dt);
         self.vibrato_lfo.advance(dt);
+        // Where the cutoff is at the block's end, to glide there.
+        let cutoff_end = p[g::INITIAL_FILTER_FC as usize]
+            + p[g::MOD_LFO_TO_FILTER_FC as usize] * self.modulation_lfo.value()
+            + p[g::MOD_ENV_TO_FILTER_FC as usize] * self.modulation_envelope.value();
 
         let gain = centibels_to_gain(attenuation) * self.volume_envelope.gain();
         let (sin, cos) = angle.sin_cos();
         let targets = [gain * cos, gain * sin, gain * reverb, gain * chorus];
 
         let mut scratch = self.scratch;
-        let playing = self.generate(&mut scratch[..n], data, step, interpolation);
-        self.filter.process(&mut scratch[..n]);
+        let playing = self.generate(&mut scratch[..n], data.points(), step, interpolation);
+        // A cutoff on the move follows its course in steps through the block
+        // (each at its middle) instead of holding the block's first value.
+        if (cutoff_end - cutoff).abs() > 1.0 && cutoff.min(cutoff_end) < 13500.0 {
+            let length = n.div_ceil(FILTER_STEPS);
+            for (k, part) in scratch[..n].chunks_mut(length).enumerate() {
+                let t = (k * length + part.len() / 2) as f32 / n as f32;
+                self.filter.set(cutoff + (cutoff_end - cutoff) * t, resonance, sample_rate);
+                self.filter.process(part);
+            }
+        } else {
+            self.filter.set(cutoff, resonance, sample_rate);
+            self.filter.process(&mut scratch[..n]);
+        }
 
         let from = self.last_gains;
         let inverse = 1.0 / n as f32;
@@ -419,8 +458,26 @@ impl Voice {
 
     /// Reads `out.len()` interpolated sample points. Returns false once the
     /// sample has played to its end (the rest of `out` is then silent).
-    fn generate(&mut self, out: &mut [f32], data: &SampleData, step: u64, interpolation: Interpolation) -> bool {
+    fn generate(&mut self, out: &mut [f32], data: Points<'_>, step: u64, interpolation: Interpolation) -> bool {
+        // One loop per method, so the per-point code has no branch on it.
+        match interpolation {
+            Interpolation::Linear => self.generate_with::<LINEAR>(out, data, step),
+            Interpolation::Cubic => self.generate_with::<CUBIC>(out, data, step),
+            Interpolation::Sinc => self.generate_with::<SINC>(out, data, step),
+        }
+    }
+
+    #[inline(always)]
+    fn generate_with<const METHOD: u8>(&mut self, out: &mut [f32], data: Points<'_>, step: u64) -> bool {
+        let interpolation = match METHOD {
+            LINEAR => Interpolation::Linear,
+            CUBIC => Interpolation::Cubic,
+            _ => Interpolation::Sinc,
+        };
         let loop_length = (self.loop_end - self.loop_start) as u64;
+        // Where the points stop being plain reads (wrapping or silence).
+        let limit = if self.looping { self.loop_end } else { self.end };
+        let band = SincTable::shared().band(step as f32 * FRACTION_SCALE);
         for i in 0..out.len() {
             let mut index = (self.phase >> FRACTION_BITS) as usize;
             if self.looping {
@@ -433,7 +490,17 @@ impl Voice {
                 return false;
             }
             let fraction = (self.phase & FRACTION_MASK) as f32 * FRACTION_SCALE;
+            // Away from the sample's edges (nearly always), read directly.
+            let inside = index > self.start && index + 2 < limit;
             out[i] = match interpolation {
+                Interpolation::Linear if inside => {
+                    let x0 = data.get(index);
+                    let x1 = data.get(index + 1);
+                    x0 + (x1 - x0) * fraction
+                }
+                Interpolation::Cubic if inside => {
+                    cubic(data.get(index - 1), data.get(index), data.get(index + 1), data.get(index + 2), fraction)
+                }
                 Interpolation::Linear => {
                     let x0 = self.point(data, index);
                     let x1 = self.point(data, index + 1);
@@ -444,11 +511,22 @@ impl Voice {
                     let x0 = self.point(data, index);
                     let x1 = self.point(data, index + 1);
                     let x2 = self.point(data, index + 2);
-                    // Catmull-Rom (4-point, 3rd-order Hermite).
-                    let c1 = 0.5 * (x1 - xm1);
-                    let c2 = xm1 - 2.5 * x0 + 2.0 * x1 - 0.5 * x2;
-                    let c3 = 0.5 * (x2 - xm1) + 1.5 * (x0 - x1);
-                    ((c3 * fraction + c2) * fraction + c1) * fraction + x0
+                    cubic(xm1, x0, x1, x2, fraction)
+                }
+                Interpolation::Sinc => {
+                    let mut points = [0.0; sinc::TAPS];
+                    let first = index as isize + sinc::FIRST_TAP;
+                    let inside = first > self.start as isize && index + sinc::TAPS / 2 < limit;
+                    if !inside || !data.read(first as usize, &mut points) {
+                        // Silence before the start; wrapped or silent past the end.
+                        for (j, point) in points.iter_mut().enumerate() {
+                            let at = first + j as isize;
+                            if at >= self.start as isize {
+                                *point = self.point(data, at as usize);
+                            }
+                        }
+                    }
+                    band.interpolate(&points, fraction)
                 }
             };
             self.phase = self.phase.wrapping_add(step);
@@ -459,7 +537,7 @@ impl Voice {
     /// The sample point `index`, wrapped into the loop while looping and
     /// silent past the end.
     #[inline]
-    fn point(&self, data: &SampleData, index: usize) -> f32 {
+    fn point(&self, data: Points<'_>, index: usize) -> f32 {
         if self.looping {
             if index >= self.loop_end {
                 return data.get(index - (self.loop_end - self.loop_start));
@@ -469,4 +547,14 @@ impl Voice {
         }
         data.get(index)
     }
+}
+
+/// Catmull-Rom interpolation (4-point, 3rd-order Hermite) between `x0` and
+/// `x1`.
+#[inline(always)]
+fn cubic(xm1: f32, x0: f32, x1: f32, x2: f32, fraction: f32) -> f32 {
+    let c1 = 0.5 * (x1 - xm1);
+    let c2 = xm1 - 2.5 * x0 + 2.0 * x1 - 0.5 * x2;
+    let c3 = 0.5 * (x2 - xm1) + 1.5 * (x0 - x1);
+    ((c3 * fraction + c2) * fraction + c1) * fraction + x0
 }

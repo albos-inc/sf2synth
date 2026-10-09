@@ -190,19 +190,58 @@ pub(crate) struct SampleData {
 }
 
 impl SampleData {
-    /// The sample point `index` as -1…1. Out of range reads give 0.
+    /// The sample points as slices of the file, for reading many of them
+    /// (getting the bytes goes through a dynamic call).
     #[inline]
-    pub fn get(&self, index: usize) -> f32 {
-        if index >= self.len {
-            return 0.0;
-        }
+    pub fn points(&self) -> Points<'_> {
         let bytes = (*self.bytes).as_ref();
-        let at = self.smpl + index * 2;
-        let high = i16::from_le_bytes([bytes[at], bytes[at + 1]]);
+        let smpl = bytes.get(self.smpl..self.smpl + self.len * 2).unwrap_or_default();
+        let sm24 = self.sm24.and_then(|at| bytes.get(at..at + self.len));
+        Points { smpl, sm24 }
+    }
+
+    /// The sample point `index` as -1…1. Out of range reads give 0.
+    pub fn get(&self, index: usize) -> f32 {
+        self.points().get(index)
+    }
+}
+
+/// The 16-bit sample points (and their 24-bit extension) in place.
+#[derive(Clone, Copy)]
+pub(crate) struct Points<'a> {
+    smpl: &'a [u8],
+    sm24: Option<&'a [u8]>,
+}
+
+impl Points<'_> {
+    /// Fills `out` with the points from `start`, if they are all there.
+    #[inline(always)]
+    pub fn read<const N: usize>(&self, start: usize, out: &mut [f32; N]) -> bool {
+        let Some(bytes) = self.smpl.get(start * 2..(start + N) * 2) else { return false };
+        match self.sm24 {
+            None => {
+                for (point, pair) in out.iter_mut().zip(bytes.chunks_exact(2)) {
+                    *point = i16::from_le_bytes([pair[0], pair[1]]) as f32 * (1.0 / 32768.0);
+                }
+            }
+            Some(_) => {
+                for (i, point) in out.iter_mut().enumerate() {
+                    *point = self.get(start + i);
+                }
+            }
+        }
+        true
+    }
+
+    /// The sample point `index` as -1…1. Out of range reads give 0.
+    #[inline(always)]
+    pub fn get(&self, index: usize) -> f32 {
+        let Some(&[low_byte, high_byte]) = self.smpl.get(index * 2..index * 2 + 2) else { return 0.0 };
+        let high = i16::from_le_bytes([low_byte, high_byte]);
         match self.sm24 {
             None => high as f32 * (1.0 / 32768.0),
             Some(sm24) => {
-                let low = bytes[sm24 + index];
+                let low = sm24.get(index).copied().unwrap_or(0);
                 (((high as i32) << 8) | low as i32) as f32 * (1.0 / 8_388_608.0)
             }
         }
