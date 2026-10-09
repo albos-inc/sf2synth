@@ -21,13 +21,17 @@ fn handle<'a>(handle: jlong) -> &'a Handle {
     unsafe { &*(handle as *const Handle) }
 }
 
-/// Reads the file of `fd`, taking ownership of (and closing) it.
-fn read_fd(fd: jint) -> Result<Vec<u8>, String> {
+/// The file of `fd`, taking ownership of (and closing) it.
+fn file(fd: jint) -> File {
     // SAFETY: Kotlin detaches the descriptor from its ParcelFileDescriptor,
     // so it is ours to read and close.
-    let mut file = unsafe { File::from_raw_fd(fd) };
+    unsafe { File::from_raw_fd(fd) }
+}
+
+/// Reads the file of `fd`, taking ownership of (and closing) it.
+fn read_fd(fd: jint) -> Result<Vec<u8>, String> {
     let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+    file(fd).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
     Ok(bytes)
 }
 
@@ -60,7 +64,8 @@ pub extern "system" fn Java_jp_albos_sf2player_NativePlayer_loadSoundFont<'l>(
     name: JString<'l>,
 ) -> jstring {
     let name: String = env.get_string(&name).map(Into::into).unwrap_or_default();
-    let result = read_fd(fd).and_then(|bytes| handle(player).load_sound_font(bytes, &name));
+    // Memory-mapped: a large SF2 costs no memory.
+    let result = handle(player).load_sound_font(&file(fd), &name);
     error_string(&mut env, result)
 }
 

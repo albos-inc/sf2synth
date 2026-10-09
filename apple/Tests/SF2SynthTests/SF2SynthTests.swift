@@ -108,6 +108,44 @@ final class SF2SynthTests: XCTestCase {
         engine.stop()
     }
 
+    func testParametersSetTheGain() throws {
+        let synth = try SF2SynthInstrument(soundFont: fontURL())
+        synth.synth.isReverbEnabled = false
+        synth.synth.isChorusEnabled = false
+        let (engine, _) = try engine(with: synth)
+        synth.startNote(60, withVelocity: 100, onChannel: 0)
+        _ = try render(engine, frames: 4096)
+        let full = try render(engine, frames: 4096)
+        // Through the parameter tree, as a host would.
+        let gain = try XCTUnwrap(synth.auAudioUnit.parameterTree?.parameter(
+            withAddress: SF2SynthAudioUnit.ParameterAddress.masterGain.rawValue))
+        gain.value = 0.5
+        XCTAssertEqual(synth.synth.masterGain, 0.5)
+        let half = try render(engine, frames: 4096)
+        XCTAssertEqual(half / full, 0.5, accuracy: 0.1)
+        engine.stop()
+    }
+
+    func testFullStateKeepsTheSettingsAndSoundFont() throws {
+        let url = try fontURL()
+        let first = try SF2SynthInstrument(soundFont: url)
+        first.synth.masterGain = 0.7
+        first.synth.isReverbEnabled = false
+        let state = first.synth.fullState
+
+        let second = try SF2SynthInstrument()
+        XCTAssertNil(second.synth.soundFontURL)
+        second.synth.fullState = state
+        XCTAssertEqual(second.synth.masterGain, 0.7)
+        XCTAssertFalse(second.synth.isReverbEnabled)
+        XCTAssertTrue(second.synth.isChorusEnabled)
+        XCTAssertEqual(second.synth.soundFontURL?.standardizedFileURL.path, url.standardizedFileURL.path)
+        let (engine, _) = try engine(with: second)
+        second.startNote(60, withVelocity: 100, onChannel: 0)
+        XCTAssertGreaterThan(try render(engine, frames: 4096), 0.01)
+        engine.stop()
+    }
+
     func testLoadingWhileRendering() throws {
         let url = try fontURL()
         let synth = try SF2SynthInstrument(soundFont: url)

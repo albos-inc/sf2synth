@@ -39,9 +39,10 @@ impl Handle {
         f(&mut self.lock().player)
     }
 
-    fn load_sound_font(&self, bytes: Vec<u8>, file_name: &str) -> Result<(), String> {
+    /// Loads an SF2 (or DLS) file, memory-mapped.
+    fn load_sound_font(&self, file: &std::fs::File, file_name: &str) -> Result<(), String> {
         let sample_rate = self.with(|p| p.sample_rate());
-        let loaded = LoadedSoundFont::new(bytes, file_name, sample_rate)?;
+        let loaded = LoadedSoundFont::open(file, file_name, sample_rate)?;
         let previous = self.with(|p| p.set_sound_font(loaded));
         drop(previous);
         Ok(())
@@ -144,8 +145,8 @@ pub unsafe extern "C" fn sf2player_free(player: *mut Handle) {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sf2player_load_sound_font(player: *const Handle, path: *const c_char) -> *mut c_char {
     let path = unsafe { path_string(path) };
-    let result = std::fs::read(&path).map_err(|e| e.to_string());
-    error_string(result.and_then(|bytes| unsafe { handle(player) }.load_sound_font(bytes, file_name(&path))))
+    let result = std::fs::File::open(&path).map_err(|e| e.to_string());
+    error_string(result.and_then(|file| unsafe { handle(player) }.load_sound_font(&file, file_name(&path))))
 }
 
 /// # Safety

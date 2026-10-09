@@ -371,3 +371,105 @@ fn gs_scale_tuning_retunes_pitch_classes() {
     let measured = frequency(&render(&mut synth, 44100), SAMPLE_RATE);
     assert!((measured - SINE_HZ).abs() < 0.5, "{measured}");
 }
+
+fn reverb_send_peak(synth: &mut Synthesizer) -> f32 {
+    let frames = 4410;
+    let (mut left, mut right, mut reverb) = (vec![0.0; frames], vec![0.0; frames], vec![0.0; frames]);
+    synth.render_with_sends(&mut left, &mut right, Some(&mut reverb), None);
+    peak(&reverb)
+}
+
+#[test]
+fn gs_xg_and_gm2_start_with_some_reverb() {
+    let mut synth = sine_synth();
+    synth.note_on(0, 69, 100);
+    assert_eq!(reverb_send_peak(&mut synth), 0.0, "General MIDI: no reverb send");
+    for reset in [&GS_RESET[..], &XG_ON[..], &GM2_ON[..]] {
+        synth.process_midi_message(reset);
+        synth.note_on(0, 69, 100);
+        assert!(reverb_send_peak(&mut synth) > 0.001);
+    }
+}
+
+#[test]
+fn gs_part_parameters() {
+    let mut synth = synth_with(bank_font(&PRESETS));
+    synth.process_midi_message(&GS_RESET);
+    // Part 1 tone number: bank 8, program 0.
+    synth.process_midi_message(&[0xf0, 0x41, 0x10, 0x42, 0x12, 0x40, 0x11, 0x00, 0x08, 0x00, 0x27, 0xf7]);
+    assert_eq!(playing(&synth, 0), "8:0");
+    // Part 2 program only.
+    synth.process_midi_message(&[0xf0, 0x41, 0x10, 0x42, 0x12, 0x40, 0x12, 0x01, 0x01, 0x2c, 0xf7]);
+    assert_eq!(playing(&synth, 1), "0:1");
+    // Part 1 level 0 silences it.
+    synth.note_on(0, 69, 100);
+    synth.process_midi_message(&[0xf0, 0x41, 0x10, 0x42, 0x12, 0x40, 0x11, 0x19, 0x00, 0x16, 0xf7]);
+    render(&mut synth, 4410);
+    assert!(peak(&render(&mut synth, 4410)) < 1e-3);
+}
+
+#[test]
+fn xg_part_parameters() {
+    let mut synth = synth_with(bank_font(&PRESETS));
+    synth.process_midi_message(&XG_ON);
+    // Part 3: bank MSB 127, program 8 (a drum kit in XG).
+    synth.process_midi_message(&[0xf0, 0x43, 0x10, 0x4c, 0x08, 0x02, 0x01, 0x7f, 0xf7]);
+    synth.process_midi_message(&[0xf0, 0x43, 0x10, 0x4c, 0x08, 0x02, 0x03, 0x08, 0xf7]);
+    assert_eq!(playing(&synth, 2), "128:8");
+    // Part 1 volume 0.
+    synth.note_on(0, 69, 100);
+    synth.process_midi_message(&[0xf0, 0x43, 0x10, 0x4c, 0x08, 0x00, 0x0b, 0x00, 0xf7]);
+    render(&mut synth, 4410);
+    assert!(peak(&render(&mut synth, 4410)) < 1e-3);
+}
+
+#[test]
+fn key_shifts_transpose() {
+    let measure = |messages: &[&[u8]]| {
+        let mut synth = sine_synth();
+        for message in messages {
+            synth.process_midi_message(message);
+        }
+        synth.note_on(0, 69, 100);
+        render(&mut synth, 4410);
+        frequency(&render(&mut synth, 44100), SAMPLE_RATE)
+    };
+    // GS part 1 key shift +12.
+    let up = measure(&[&GS_RESET, &[0xf0, 0x41, 0x10, 0x42, 0x12, 0x40, 0x11, 0x16, 0x4c, 0x1d, 0xf7]]);
+    assert!((up - SINE_HZ * 2.0).abs() < 0.5, "{up}");
+    // GS master key shift −12.
+    let down = measure(&[&GS_RESET, &[0xf0, 0x41, 0x10, 0x42, 0x12, 0x40, 0x00, 0x05, 0x34, 0x07, 0xf7]]);
+    assert!((down - SINE_HZ / 2.0).abs() < 0.5, "{down}");
+    // XG part 1 note shift +12 and transpose −12 cancel out.
+    let same = measure(&[
+        &XG_ON,
+        &[0xf0, 0x43, 0x10, 0x4c, 0x08, 0x00, 0x08, 0x4c, 0xf7],
+        &[0xf0, 0x43, 0x10, 0x4c, 0x00, 0x00, 0x06, 0x34, 0xf7],
+    ]);
+    assert!((same - SINE_HZ).abs() < 0.5, "{same}");
+}
+
+#[test]
+fn midi_files_join_sysex_continued_in_f7_packets() {
+    let events = vec![
+        // F0 7F 7F 04 01, then 00 00 F7 in a continuation packet.
+        (0, vec![0xf0, 4, 0x7f, 0x7f, 0x04, 0x01]),
+        (10, vec![0xf7, 3, 0x00, 0x00, 0xf7]),
+        // A whole message escaped in an F7 packet.
+        (20, vec![0xf7, 6, 0xf0, 0x7e, 0x7f, 0x09, 0x01, 0xf7]),
+        // Other escaped bytes are skipped.
+        (30, vec![0xf7, 1, 0xfa]),
+        (40, vec![0x90, 69, 100]),
+    ];
+    let midi = MidiFile::from_bytes(&midi_file(&events)).unwrap();
+    let messages: Vec<&[u8]> = midi.events().iter().map(|e| midi.message(e)).collect();
+    assert_eq!(
+        messages,
+        [
+            &[0xf0, 0x7f, 0x7f, 0x04, 0x01, 0x00, 0x00, 0xf7][..],
+            &[0xf0, 0x7e, 0x7f, 0x09, 0x01, 0xf7],
+            &[0x90, 69, 100]
+        ]
+    );
+    assert_eq!(midi.events()[0].tick, 0);
+}

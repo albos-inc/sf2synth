@@ -20,7 +20,22 @@ public struct SF2SynthError: Error, CustomStringConvertible {
 ///
 /// MIDI arrives as MIDI 1.0 events (System Exclusive included, even when
 /// split over several events) or as MIDI 2.0 event lists.
+///
+/// The master gain and the built-in reverb and chorus are parameters
+/// (``ParameterAddress``) that hosts can show and automate. ``fullState``
+/// keeps them and the SoundFont (as a bookmark), so a host's project
+/// reopens with the same sound.
 public final class SF2SynthAudioUnit: AUAudioUnit {
+    /// The addresses of the unit's parameters.
+    public enum ParameterAddress: AUParameterAddress {
+        /// Gain applied to the mix, 0…2.
+        case masterGain = 0
+        /// The built-in reverb, 0 (off) or 1 (on).
+        case reverb = 1
+        /// The built-in chorus, 0 (off) or 1 (on).
+        case chorus = 2
+    }
+
     public static let componentDescription = AudioComponentDescription(
         componentType: kAudioUnitType_MusicDevice,
         componentSubType: fourCharCode("sf2s"),
@@ -48,22 +63,29 @@ public final class SF2SynthAudioUnit: AUAudioUnit {
     /// Gain applied to the mix and the send. 1.0 is sf2synth's default; 1.2
     /// matches Apple's MIDI synth playing the same SoundFont.
     public var masterGain: Float {
-        get { kernel.settings.withLock { $0.masterGain } }
-        set { kernel.settings.withLock { $0.masterGain = newValue; $0.version &+= 1 } }
+        get { parameter(.masterGain).value }
+        set { parameter(.masterGain).value = newValue }
     }
 
     /// The built-in reverb (on by default). The reverb send (bus 1) is
     /// produced either way.
     public var isReverbEnabled: Bool {
-        get { kernel.settings.withLock { $0.reverb } }
-        set { kernel.settings.withLock { $0.reverb = newValue; $0.version &+= 1 } }
+        get { parameter(.reverb).value >= 0.5 }
+        set { parameter(.reverb).value = newValue ? 1 : 0 }
     }
 
     /// The built-in chorus (on by default).
     public var isChorusEnabled: Bool {
-        get { kernel.settings.withLock { $0.chorus } }
-        set { kernel.settings.withLock { $0.chorus = newValue; $0.version &+= 1 } }
+        get { parameter(.chorus).value >= 0.5 }
+        set { parameter(.chorus).value = newValue ? 1 : 0 }
     }
+
+    /// The SoundFont playing, if any.
+    public private(set) var soundFontURL: URL?
+    /// Whether ``soundFontURL`` was memory-mapped.
+    public private(set) var isSoundFontMapped = true
+    /// A security-scoped URL being accessed while its file plays.
+    private var accessedURL: URL?
 
     /// Voices that can sound at once; takes effect at the next
     /// ``loadSoundFont(at:mapped:)`` or when render resources are allocated
@@ -85,9 +107,60 @@ public final class SF2SynthAudioUnit: AUAudioUnit {
         sendBus.maximumChannelCount = 2
         busses = AUAudioUnitBusArray(audioUnit: self, busType: .output, busses: [mainBus, sendBus])
         maximumFramesToRender = 4096
+        parameterTree = Self.makeParameterTree(kernel: kernel)
+    }
+
+    deinit {
+        accessedURL?.stopAccessingSecurityScopedResource()
+    }
+
+    private static func makeParameterTree(kernel: Kernel) -> AUParameterTree {
+        let flags: AudioUnitParameterOptions = [.flag_IsReadable, .flag_IsWritable]
+        func make(_ address: ParameterAddress, _ identifier: String, _ name: String, max: AUValue,
+                  unit: AudioUnitParameterUnit, value: AUValue) -> AUParameter {
+            let parameter = AUParameterTree.createParameter(
+                withIdentifier: identifier, name: name, address: address.rawValue, min: 0, max: max,
+                unit: unit, unitName: nil, flags: flags, valueStrings: nil, dependentParameters: nil)
+            parameter.value = value
+            return parameter
+        }
+        let tree = AUParameterTree.createTree(withChildren: [
+            make(.masterGain, "masterGain", "Master Gain", max: 2, unit: .linearGain, value: 1),
+            make(.reverb, "reverb", "Reverb", max: 1, unit: .boolean, value: 1),
+            make(.chorus, "chorus", "Chorus", max: 1, unit: .boolean, value: 1),
+        ])
+        tree.implementorValueObserver = { parameter, value in
+            kernel.settings.withLock { settings in
+                switch ParameterAddress(rawValue: parameter.address) {
+                case .masterGain: settings.masterGain = max(0, value)
+                case .reverb: settings.reverb = value >= 0.5
+                case .chorus: settings.chorus = value >= 0.5
+                case nil: return
+                }
+                settings.version &+= 1
+            }
+        }
+        tree.implementorValueProvider = { parameter in
+            kernel.settings.withLock { settings in
+                switch ParameterAddress(rawValue: parameter.address) {
+                case .masterGain: settings.masterGain
+                case .reverb: settings.reverb ? 1 : 0
+                case .chorus: settings.chorus ? 1 : 0
+                case nil: 0
+                }
+            }
+        }
+        return tree
+    }
+
+    private func parameter(_ address: ParameterAddress) -> AUParameter {
+        parameterTree!.parameter(withAddress: address.rawValue)!
     }
 
     override public var outputBusses: AUAudioUnitBusArray { busses }
+
+    /// No input; mono or stereo output (mono gets the left channel).
+    override public var channelCapabilities: [NSNumber]? { [0, 1, 0, 2] }
 
     override public func shouldChange(to format: AVAudioFormat, for bus: AUAudioUnitBus) -> Bool {
         format.commonFormat == .pcmFormatFloat32 && !format.isInterleaved && (1...2).contains(format.channelCount)
@@ -97,19 +170,94 @@ public final class SF2SynthAudioUnit: AUAudioUnit {
     /// SF2 file into memory instead of reading it, so a large file costs no
     /// memory (it must not change while it plays). Can be called while
     /// rendering: the new synth takes over at the next buffer.
+    ///
+    /// A security-scoped URL (from a file picker or a bookmark) is accessed
+    /// for as long as its file plays.
     public func loadSoundFont(at url: URL, mapped: Bool = true) throws {
+        let accessing = url.startAccessingSecurityScopedResource()
         var error: UnsafeMutablePointer<CChar>?
         let font = url.withUnsafeFileSystemRepresentation { path -> OpaquePointer? in
             guard let path else { return nil }
             return mapped ? sf2synth_font_load_mapped(path, &error) : sf2synth_font_load(path, &error)
         }
         guard let font else {
+            if accessing {
+                url.stopAccessingSecurityScopedResource()
+            }
             let message = error.map { String(cString: $0) } ?? "can't read \(url.path)"
             sf2synth_string_free(error)
             throw SF2SynthError(description: message)
         }
         kernel.replaceFont(font, sampleRate: renderResourcesAllocated ? mainBus.format.sampleRate : nil,
                            maximumVoices: maximumVoices)
+        // A file read into memory no longer needs the access.
+        if accessing && !mapped {
+            url.stopAccessingSecurityScopedResource()
+        }
+        accessedURL?.stopAccessingSecurityScopedResource()
+        accessedURL = accessing && mapped ? url : nil
+        soundFontURL = url
+        isSoundFontMapped = mapped
+    }
+
+    // MARK: - State
+
+    private static let stateKey = "sf2synth"
+
+    /// The host's saved state: the parameters, plus the SoundFont as a
+    /// bookmark (and its path, for when the bookmark can't be resolved).
+    override public var fullState: [String: Any]? {
+        get {
+            var state = super.fullState ?? [:]
+            var synth: [String: Any] = [
+                "masterGain": masterGain,
+                "reverb": isReverbEnabled,
+                "chorus": isChorusEnabled,
+                "mapped": isSoundFontMapped,
+            ]
+            if let url = soundFontURL {
+                synth["soundFontPath"] = url.path
+                synth["soundFontBookmark"] = Self.bookmark(for: url)
+            }
+            state[Self.stateKey] = synth
+            return state
+        }
+        set {
+            super.fullState = newValue
+            guard let synth = newValue?[Self.stateKey] as? [String: Any] else { return }
+            if let gain = synth["masterGain"] as? Float { masterGain = gain }
+            if let reverb = synth["reverb"] as? Bool { isReverbEnabled = reverb }
+            if let chorus = synth["chorus"] as? Bool { isChorusEnabled = chorus }
+            let mapped = synth["mapped"] as? Bool ?? true
+            let bookmarked = (synth["soundFontBookmark"] as? Data).flatMap(Self.resolve(bookmark:))
+            let path = (synth["soundFontPath"] as? String).map { URL(fileURLWithPath: $0) }
+            for url in [bookmarked, path].compactMap({ $0 }) where url != soundFontURL {
+                if (try? loadSoundFont(at: url, mapped: mapped)) != nil {
+                    break
+                }
+            }
+        }
+    }
+
+    private static func bookmark(for url: URL) -> Data? {
+        #if os(macOS)
+        if let data = try? url.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil,
+                                            relativeTo: nil) {
+            return data
+        }
+        #endif
+        return try? url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil)
+    }
+
+    private static func resolve(bookmark: Data) -> URL? {
+        var stale = false
+        #if os(macOS)
+        if let url = try? URL(resolvingBookmarkData: bookmark, options: .withSecurityScope, relativeTo: nil,
+                              bookmarkDataIsStale: &stale) {
+            return url
+        }
+        #endif
+        return try? URL(resolvingBookmarkData: bookmark, options: [], relativeTo: nil, bookmarkDataIsStale: &stale)
     }
 
     override public func allocateRenderResources() throws {
@@ -334,6 +482,10 @@ private final class Kernel {
                 let bytes = (UnsafeRawPointer(current) + MemoryLayout<AUMIDIEvent>.offset(of: \.data)!)
                     .assumingMemoryBound(to: UInt8.self)
                 sf2synth_midi_bytes(synth, bytes, Int(current.pointee.MIDI.length))
+            case .parameter, .parameterRamp:
+                // Automation: at once (ramps jump to their end value).
+                let parameter = current.pointee.parameter
+                applyParameter(parameter.parameterAddress, parameter.value, to: synth)
             case .midiEventList:
                 // The list runs past the struct: read it in place.
                 let list = (UnsafeRawPointer(current) + MemoryLayout<AUMIDIEventList>.offset(of: \.eventList)!)
@@ -359,6 +511,15 @@ private final class Kernel {
         }) ?? nil else { return }
         synth = incoming.pointer
         appliedVersion = -1
+    }
+
+    private func applyParameter(_ address: AUParameterAddress, _ value: AUValue, to synth: OpaquePointer) {
+        switch SF2SynthAudioUnit.ParameterAddress(rawValue: address) {
+        case .masterGain: sf2synth_set_master_gain(synth, max(0, value))
+        case .reverb: sf2synth_set_reverb_enabled(synth, value >= 0.5)
+        case .chorus: sf2synth_set_chorus_enabled(synth, value >= 0.5)
+        case nil: break
+        }
     }
 
     private func applySettings(_ synth: OpaquePointer) {

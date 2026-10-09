@@ -216,7 +216,11 @@ impl MidiFile {
                     tempo_changes.push(TempoChange { tick, time, microseconds_per_quarter: tempo });
                 }
                 Raw::Channel(bytes, len) => events.push(MidiEvent { time, tick, track, bytes, len, sysex: None }),
-                Raw::SysEx(message) => {
+                Raw::SysEx(mut message) => {
+                    if message.last() != Some(&0xf7) {
+                        // Never finished: end it here.
+                        message.push(0xf7);
+                    }
                     let range = (sysex_data.len() as u32, message.len() as u32);
                     sysex_data.extend_from_slice(&message);
                     events.push(MidiEvent { time, tick, track, bytes: [0xf0, 0, 0], len: 1, sysex: Some(range) });
@@ -272,6 +276,8 @@ fn read_track(data: &[u8], track: u16, out: &mut Vec<(u64, u16, u32, Raw)>) {
     let mut tick = 0u64;
     let mut running_status = 0u8;
     let mut order = 0u32;
+    // A SysEx message (its index in `out`) continued in F7 packets.
+    let mut continued: Option<usize> = None;
     loop {
         let Some(delta) = reader.variable_length() else { return };
         tick += delta as u64;
@@ -310,18 +316,29 @@ fn read_track(data: &[u8], track: u16, out: &mut Vec<(u64, u16, u32, Raw)>) {
                 let mut message = Vec::with_capacity(body.len() + 2);
                 message.push(0xf0);
                 message.extend_from_slice(body);
-                if message.last() != Some(&0xf7) {
-                    // Continued in F7 packets, which aren't read: end it here.
-                    message.push(0xf7);
-                }
+                // Without F7, it goes on in F7 packets.
+                continued = (message.last() != Some(&0xf7)).then_some(out.len());
                 out.push((tick, track, order, Raw::SysEx(message)));
                 order += 1;
             }
             0xf7 => {
-                // Escaped bytes or a SysEx continuation packet: skipped.
                 let Some(length) = reader.variable_length() else { return };
-                if reader.skip(length as usize).is_none() {
-                    return;
+                let Some(body) = reader.skip(length as usize) else { return };
+                match continued.and_then(|index| out.get_mut(index)) {
+                    // A continuation packet (at the message's start time).
+                    Some((_, _, _, Raw::SysEx(message))) => {
+                        message.extend_from_slice(body);
+                        if message.last() == Some(&0xf7) {
+                            continued = None;
+                        }
+                    }
+                    // An escaped complete message.
+                    _ if body.first() == Some(&0xf0) => {
+                        out.push((tick, track, order, Raw::SysEx(body.to_vec())));
+                        order += 1;
+                    }
+                    // Other escaped bytes.
+                    _ => {}
                 }
             }
             0x80..=0xef => {

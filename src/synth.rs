@@ -106,9 +106,13 @@ struct ByteStream {
 /// can be called from an audio callback.
 ///
 /// System Exclusive messages it understands: GM System On / Off, GM2 System
-/// On, GS Reset, XG System On; master volume and tuning (Universal, GS and
-/// XG); GS "Use for Rhythm Part" and XG "Part Mode" (drum parts); GS Scale
-/// Tuning (temperaments); GS reverb and chorus parameters.
+/// On, GS Reset, XG System On; master volume, tuning and key shift
+/// (Universal, GS and XG); GS and XG part parameters (program, level, pan,
+/// reverb and chorus send, key shift, drum part); GS Scale Tuning
+/// (temperaments); GS reverb and chorus parameters.
+///
+/// After a GS, XG or GM2 reset, every channel starts with a reverb send
+/// (CC91) of 40, as those sound modules do; without one, it starts at 0.
 pub struct Synthesizer {
     font: Arc<SoundFont>,
     sample_rate: f32,
@@ -136,6 +140,7 @@ pub struct Synthesizer {
     /// Cents.
     master_fine_tuning: f32,
     master_coarse_tuning: f32,
+    master_key_shift: f32,
     gs_effects: GsEffects,
     // Input parsing.
     sysex: SysExBuffer,
@@ -173,6 +178,7 @@ impl Synthesizer {
             master_volume: 1.0,
             master_fine_tuning: 0.0,
             master_coarse_tuning: 0.0,
+            master_key_shift: 0.0,
             gs_effects: GsEffects::default(),
             sysex: SysExBuffer::new(),
             stream: ByteStream::default(),
@@ -589,10 +595,16 @@ impl Synthesizer {
         self.master_volume = 1.0;
         self.master_fine_tuning = 0.0;
         self.master_coarse_tuning = 0.0;
+        self.master_key_shift = 0.0;
         for (i, channel) in self.channels.iter_mut().enumerate() {
             *channel = Channel::new(self.drum_channel == Some(i as u8));
             if mode == Mode::Xg && channel.is_drum {
                 channel.bank_msb = 127;
+            }
+            if mode != Mode::General {
+                // GS, XG and GM2 sound modules start every part with some
+                // reverb (General MIDI leaves it to the song).
+                channel.cc[91] = 40;
             }
         }
         for channel in 0..CHANNEL_COUNT {
@@ -638,6 +650,22 @@ impl Synthesizer {
                 self.gs_effects.set_chorus(parameter, value);
                 self.apply_effect_settings();
             }
+            SysEx::PartControl { channel, controller, value } => self.control_change(channel, controller, value),
+            SysEx::PartProgram { channel, bank, program } => {
+                if let Some(bank) = bank {
+                    self.control_change(channel, 0, bank);
+                }
+                self.program_change(channel, program);
+            }
+            SysEx::PartKeyShift { channel, semitones } => {
+                if let Some(c) = self.channels.get_mut(channel as usize) {
+                    c.set_key_shift(semitones);
+                }
+            }
+            SysEx::MasterKeyShift(semitones) => {
+                self.master_key_shift = semitones as f32 * 100.0;
+                self.apply_master_tuning();
+            }
             SysEx::GsScaleTuning { channel, start, values, count } => {
                 if let Some(c) = self.channels.get_mut(channel as usize) {
                     let classes = &mut c.scale_tuning[start as usize..start as usize + count as usize];
@@ -650,7 +678,7 @@ impl Synthesizer {
     }
 
     fn apply_master_tuning(&mut self) {
-        let cents = self.master_fine_tuning + self.master_coarse_tuning;
+        let cents = self.master_fine_tuning + self.master_coarse_tuning + self.master_key_shift;
         for channel in &mut self.channels {
             channel.set_master_tuning(cents);
         }

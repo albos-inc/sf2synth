@@ -1,0 +1,83 @@
+# An app with an Audio Unit extension that offers sf2synth to hosts such as
+# GarageBand and Logic. Generate the Xcode project with XcodeGen:
+#
+#   ../../apple/build-xcframework.sh   # once, unless using the released one
+#   xcodegen generate
+#   open SF2SynthAU.xcodeproj
+name: SF2SynthAU
+options:
+  bundleIdPrefix: jp.albos
+  deploymentTarget:
+    iOS: "16.0"
+    macOS: "13.0"
+  createIntermediateGroups: true
+packages:
+  SF2Synth:
+    path: ../..
+settings:
+  base:
+    MARKETING_VERSION: "0.2.0"
+    CURRENT_PROJECT_VERSION: "1"
+    SWIFT_VERSION: "5.0"
+    DEVELOPMENT_TEAM: ""
+    CODE_SIGN_STYLE: Automatic
+    "CODE_SIGN_IDENTITY[sdk=macosx*]": "-"
+    ENABLE_HARDENED_RUNTIME: YES
+targets:
+  SF2SynthAU:
+    type: application
+    supportedDestinations: [iOS, macOS]
+    sources: [App]
+    dependencies:
+      - package: SF2Synth
+        product: SF2Synth
+      - target: SF2SynthAUExtension
+        embed: true
+        codeSign: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: jp.albos.sf2synth-au
+        PRODUCT_NAME: sf2synth AU
+        PRODUCT_MODULE_NAME: SF2SynthAU
+        TARGETED_DEVICE_FAMILY: "1,2"
+        "CODE_SIGN_ENTITLEMENTS[sdk=macosx*]": App/App.entitlements
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.music
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleDisplayName: sf2synth AU
+        UILaunchScreen: {}
+        UIBackgroundModes: [audio]
+  SF2SynthAUExtension:
+    type: app-extension
+    supportedDestinations: [iOS, macOS]
+    sources: [Extension]
+    dependencies:
+      - package: SF2Synth
+        product: SF2Synth
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: jp.albos.sf2synth-au.extension
+        # Not "sf2synth": the module would clash with the package's SF2Synth
+        # on a case-insensitive disk.
+        PRODUCT_NAME: SF2SynthExtension
+        TARGETED_DEVICE_FAMILY: "1,2"
+        "CODE_SIGN_ENTITLEMENTS[sdk=macosx*]": Extension/Extension.entitlements
+    info:
+      path: Extension/Info.plist
+      properties:
+        CFBundleDisplayName: sf2synth
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.AudioUnit-UI
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).AudioUnitViewController
+          NSExtensionAttributes:
+            AudioComponents:
+              - name: "Albos: sf2synth"
+                description: SF2 and DLS synthesizer
+                factoryFunction: $(PRODUCT_MODULE_NAME).AudioUnitViewController
+                manufacturer: Albs
+                subtype: sf2s
+                type: aumu
+                version: 512
+                sandboxSafe: true
+                tags: [Synthesizer]

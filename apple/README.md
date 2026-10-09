@@ -1,7 +1,8 @@
 # SF2Synth for iOS and macOS
 
-sf2synth as an Audio Unit: a Swift package over the C interface in
-[../capi](../capi). iOS 16 and macOS 13 or later.
+sf2synth as an Audio Unit: the sources of the repository's Swift package
+(`Package.swift` at its root), over the C interface in [../capi](../capi).
+iOS 16 and macOS 13 or later.
 
 - `SF2SynthAudioUnit`: an in-process AUv3 music device. MIDI events are
   applied at their frame in each buffer; System Exclusive messages work
@@ -10,17 +11,30 @@ sf2synth as an Audio Unit: a Swift package over the C interface in
   one rendering per cycle, whichever the host pulls first.
 - `SF2SynthInstrument`: the same unit as an `AVAudioUnitMIDIInstrument`,
   to attach to an `AVAudioEngine`.
+- `SF2SynthViewController` and `SF2SynthView`: the principal class and the
+  settings view of an Audio Unit extension, for hosts such as GarageBand and
+  Logic. [../examples/auv3](../examples/auv3) is an app with one.
+
+The master gain, reverb and chorus are Audio Unit parameters (hosts can
+show and automate them), and `fullState` keeps them with the SoundFont (as a
+bookmark), so a host's project reopens with the same sound.
 
 ## Setup
+
+In Xcode, *File → Add Package Dependencies…* with
+`https://github.com/albos-inc/sf2synth` (from version 0.2.0), and link the
+`SF2Synth` library. The package downloads the Rust library
+(`SF2SynthC.xcframework`) attached to the release.
+
+To build the Rust library from source instead (for changes to it):
 
 ```sh
 rustup target add aarch64-apple-darwin x86_64-apple-darwin aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
 apple/build-xcframework.sh
 ```
 
-builds `SF2SynthC.xcframework` (the Rust library for macOS, iOS and the
-Simulator) next to `Package.swift`. Then add the `apple` directory to the
-Xcode project as a local package and link the `SF2Synth` library.
+builds it as `apple/SF2SynthC.xcframework`, which the package then uses
+instead of the released one (add the checkout as a local package).
 
 ## Use
 
@@ -59,7 +73,11 @@ reverb avoids it as well.
 
 ## Tests
 
+From the repository's root:
+
 ```sh
-cd apple
-SF2SYNTH_TEST_FONT=/path/to/GeneralUser-GS.sf2 swift test
+cargo run --manifest-path capi/Cargo.toml --example test_font -- /tmp/test.sf2
+SF2SYNTH_TEST_FONT=/tmp/test.sf2 swift test
 ```
+
+(any General MIDI SoundFont works as well).

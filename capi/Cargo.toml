@@ -4,7 +4,7 @@
 #   cargo build --release --target aarch64-apple-ios
 [package]
 name = "sf2synth-capi"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.85"
 description = "A C interface to the sf2synth SF2 synthesizer, with memory-mapped SoundFont loading."
@@ -19,6 +19,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [dependencies]
 sf2synth = { path = ".." }
+sf2synth-mmap = { path = "../mmap" }
 
 [profile.release]
 lto = true

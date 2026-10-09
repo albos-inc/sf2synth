@@ -16,7 +16,8 @@ Ready-to-run builds are on the
 | SoundFont | Bank name, file, SF2 version or DLS, size, presets / instruments / samples, copyright and comment |
 | Audio | Output device, sample rate, buffer size, voices playing |
 
-The last SF2 chosen is remembered. On Windows and macOS, the system's own
+SF2 files are memory-mapped, so even a large piano costs no memory. The
+last SF2 chosen is remembered. On Windows and macOS, the system's own
 General MIDI sounds (`gm.dls`, `gs_instruments.dls`) play until an SF2 is
 chosen, so a MIDI file plays right away.
 

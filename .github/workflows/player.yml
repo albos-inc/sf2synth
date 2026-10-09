@@ -6,7 +6,7 @@ on:
   push:
     tags: ["player-v*"]
   pull_request:
-    paths: ["examples/player/**", "src/**", ".github/workflows/player.yml"]
+    paths: ["examples/player/**", "src/**", "mmap/**", ".github/workflows/player.yml"]
   workflow_dispatch:
 
 env:

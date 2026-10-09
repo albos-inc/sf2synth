@@ -19,8 +19,9 @@ tuned for faithful piano reproduction.
 - **Piano details.** Sustain and sostenuto pedals, re-striking a key releases
   its previous strike, 4-point cubic interpolation, click-free gain ramps.
 - **GM, GS and XG.** System Exclusive messages: GM / GM2 System On, GS
-  Reset, XG System On, master volume and tuning, GS rhythm parts and scale
-  tuning (temperaments), XG part mode, GS reverb and chorus. Missing bank
+  Reset, XG System On, master volume, tuning and key shift, GS and XG part
+  parameters (program, level, pan, effect sends, key shift, drum parts), GS
+  scale tuning (temperaments), GS reverb and chorus. Missing bank
   variations and drum kits fall back like a Sound Canvas; any channel can
   play drums.
 - **Every way in.** Complete MIDI messages, raw MIDI byte streams (running
@@ -38,8 +39,8 @@ tuned for faithful piano reproduction.
 - **No audio I/O.** It renders into your buffers; play them with AAudio,
   Core Audio, WASAPI, [cpal](https://crates.io/crates/cpal) or anything else.
 - **C interface and Audio Unit.** [capi](capi) is the synthesizer as a C
-  library (with memory-mapped loading); [apple](apple) is a Swift package
-  wrapping it as an AUv3 instrument for iOS and macOS.
+  library (with memory-mapped loading); the Swift package wraps it as an
+  AUv3 instrument for iOS and macOS apps and Audio Unit extensions.
 
 [sf2studio](https://github.com/albos-inc/sf2studio) is a desktop app built
 on sf2synth for making, tuning and comparing SF2 instruments.
@@ -51,7 +52,7 @@ Android, Windows and macOS, with
 
 ```toml
 [dependencies]
-sf2synth = { git = "https://github.com/albos-inc/sf2synth", tag = "v0.1.1" }
+sf2synth = { git = "https://github.com/albos-inc/sf2synth", tag = "v0.2.0" }
 ```
 
 ```rust
@@ -121,8 +122,14 @@ then select sounds by bank. Each standard is followed after its reset:
   `Synthesizer::set_channel_drum` does it from code. Without a reset
   message, banks 120, 126 and 127 play drum kits when the file has no such
   melodic bank.
+- GS and XG part parameters (program, level, pan, reverb and chorus send,
+  key shift) and master key shift apply as their MIDI equivalents.
+- After a GS, XG or GM2 reset every channel starts with a reverb send
+  (CC91) of 40, as on those sound modules; General MIDI files without one
+  start dry.
 - GS reverb and chorus parameters adjust the built-in effects around the
   settings given; GS scale tuning retunes each pitch class of a part.
+- In MIDI files, SysEx messages continued in `F7` packets are joined.
 
 ### Changing the sample rate
 
@@ -140,8 +147,16 @@ let map = unsafe { memmap2::Mmap::map(&file)? };
 let font = SoundFont::from_shared(Arc::new(map))?;
 ```
 
-Without another dependency, `sf2synth_c::map_file` (from [capi](capi))
-maps a file with the system's `mmap` and gives the same shared bytes.
+Without another dependency, [`sf2synth-mmap`](mmap) maps a file with the
+system's own `mmap` (Unix) or file mapping (Windows):
+
+```toml
+sf2synth-mmap = { git = "https://github.com/albos-inc/sf2synth", tag = "v0.2.0" }
+```
+
+```rust
+let font = SoundFont::from_shared(sf2synth_mmap::map_file("piano.sf2")?)?;
+```
 
 ### From C, Swift or Kotlin
 
@@ -154,10 +169,14 @@ and effect sends.
 cargo build --release --manifest-path capi/Cargo.toml --target aarch64-apple-ios
 ```
 
-[apple](apple) is a Swift package on it: `SF2SynthAudioUnit`, an in-process
-AUv3 music device (events at their frames, SysEx, MIDI 2.0 event lists, the
-reverb send on output bus 1), and `SF2SynthInstrument`, the same as an
-`AVAudioUnitMIDIInstrument` for `AVAudioEngine`:
+The Swift package of this repository (sources in [apple](apple)) builds on
+it: `SF2SynthAudioUnit`, an AUv3 music device (events at their frames,
+SysEx, MIDI 2.0 event lists, the reverb send on output bus 1, parameters
+and saved state), `SF2SynthInstrument`, the same as an
+`AVAudioUnitMIDIInstrument` for `AVAudioEngine`, and
+`SF2SynthViewController` for an Audio Unit extension
+([examples/auv3](examples/auv3)). Add it in Xcode with the repository's
+URL; it uses the Rust library attached to the release.
 
 ```swift
 let synth = try SF2SynthInstrument(soundFont: url)   // memory-mapped
@@ -167,8 +186,8 @@ engine.connect(synth, to: engine.mainMixerNode, format: nil)
 synth.startNote(60, withVelocity: 100, onChannel: 0)
 ```
 
-Run `apple/build-xcframework.sh` once to build the Rust library for the
-package (`SF2SynthC.xcframework`), then add `apple` as a local package.
+In a checkout, `apple/build-xcframework.sh` builds the Rust library from
+source instead (see [apple](apple)).
 
 ### External MIDI output
 
@@ -212,7 +231,6 @@ piano pieces at 48 kHz runs about 100–160× faster than real time.
 ## Roadmap
 
 - Half-pedaling and the soft pedal
-- More GS / XG part parameters (part level, pan, key shift by SysEx)
 - Polyphonic aftertouch as a modulator source
 - Windowed-sinc interpolation
 - SIMD voice mixing

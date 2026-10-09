@@ -1,14 +1,13 @@
-//! The sf2synth synthesizer behind the C interface of `include/sf2synth.h`,
-//! plus [`map_file`] to memory-map a SoundFont without dependencies.
+//! The sf2synth synthesizer behind the C interface of `include/sf2synth.h`.
+//! [`map_file`] (from `sf2synth-mmap`) memory-maps a SoundFont without
+//! dependencies.
 
 use std::ffi::{CStr, CString, c_char};
 use std::sync::Arc;
 
 use sf2synth::{Interpolation, SoundFont, Synthesizer, SynthesizerSettings};
 
-mod map;
-
-pub use map::map_file;
+pub use sf2synth_mmap::map_file;
 
 /// `Sf2Font`.
 pub struct Font(Arc<SoundFont>);

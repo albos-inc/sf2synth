@@ -4,11 +4,16 @@ version = 4
 
 [[package]]
 name = "sf2synth"
-version = "0.1.1"
+version = "0.2.0"
 
 [[package]]
 name = "sf2synth-capi"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "sf2synth",
+ "sf2synth-mmap",
 ]
+
+[[package]]
+name = "sf2synth-mmap"
+version = "0.2.0"

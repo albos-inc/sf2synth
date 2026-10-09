@@ -27,6 +27,15 @@ pub(crate) enum SysEx {
     /// GS Scale Tuning of a part (address 40 1x 40…4B): `count` values for
     /// the pitch classes from `start` (0 = C), each 0…127 for −64…+63 cents.
     GsScaleTuning { channel: u8, start: u8, values: [u8; 12], count: u8 },
+    /// A part parameter that a control change also sets (GS and XG part
+    /// level, pan, reverb and chorus send; XG bank select).
+    PartControl { channel: u8, controller: u8, value: u8 },
+    /// A part's program (GS tone number with its bank, XG program).
+    PartProgram { channel: u8, bank: Option<u8>, program: u8 },
+    /// A part's key shift, in semitones (GS Pitch Key Shift, XG Note Shift).
+    PartKeyShift { channel: u8, semitones: i8 },
+    /// Master key shift, in semitones (GS Master Key-Shift, XG Transpose).
+    MasterKeyShift(i8),
 }
 
 const ROLAND: u8 = 0x41;
@@ -75,22 +84,50 @@ fn gs(high: u8, middle: u8, low: u8, value: u8, data: &[u8]) -> Option<SysEx> {
         (0x40, 0x00, 0x7f) => Some(SysEx::GsReset),
         (0x00, 0x00, 0x7f) => Some(SysEx::GsReset),
         (0x40, 0x00, 0x04) => Some(SysEx::MasterVolume(value as f32 / 127.0)),
+        (0x40, 0x00, 0x05) => Some(SysEx::MasterKeyShift(key_shift(value))),
         (0x40, 0x01, 0x30..=0x37) => Some(SysEx::GsReverb { parameter: low - 0x30, value }),
         (0x40, 0x01, 0x38..=0x3f) => Some(SysEx::GsChorus { parameter: low - 0x38, value }),
         (0x40, 0x10..=0x1f, 0x15) => {
             Some(SysEx::DrumPart { channel: gs_part_channel(middle & 0x0f), drum: value != 0 })
         }
-        (0x40, 0x10..=0x1f, 0x40..=0x4b) => {
-            let start = low - 0x40;
+        (0x40, 0x10..=0x1f, _) => gs_part(gs_part_channel(middle & 0x0f), low, value, data),
+        _ => None,
+    }
+}
+
+fn gs_part(channel: u8, address: u8, value: u8, data: &[u8]) -> Option<SysEx> {
+    let control = |controller| Some(SysEx::PartControl { channel, controller, value });
+    match address {
+        // Tone number: bank select MSB, then program.
+        0x00 => match *data {
+            [bank, program, ..] => {
+                Some(SysEx::PartProgram { channel, bank: Some(bank & 0x7f), program: program & 0x7f })
+            }
+            _ => Some(SysEx::PartControl { channel, controller: 0, value }),
+        },
+        0x01 => Some(SysEx::PartProgram { channel, bank: None, program: value }),
+        0x16 => Some(SysEx::PartKeyShift { channel, semitones: key_shift(value) }),
+        0x19 => control(7),
+        // 0 is random pan, played centered.
+        0x1c => Some(SysEx::PartControl { channel, controller: 10, value: if value == 0 { 64 } else { value } }),
+        0x21 => control(93),
+        0x22 => control(91),
+        0x40..=0x4b => {
+            let start = address - 0x40;
             let count = data.len().min(12 - start as usize);
             let mut values = [64; 12];
             for (slot, &byte) in values.iter_mut().zip(&data[..count]) {
                 *slot = byte & 0x7f;
             }
-            Some(SysEx::GsScaleTuning { channel: gs_part_channel(middle & 0x0f), start, values, count: count as u8 })
+            Some(SysEx::GsScaleTuning { channel, start, values, count: count as u8 })
         }
         _ => None,
     }
+}
+
+/// A key shift of 0x28…0x58 (−24…+24 semitones, 0x40 none).
+fn key_shift(value: u8) -> i8 {
+    (value.clamp(0x28, 0x58) as i8) - 0x40
 }
 
 /// The MIDI channel of GS part block `block` (40 1x …): block 0 is part 10,
@@ -108,8 +145,27 @@ fn xg(high: u8, middle: u8, low: u8, value: u8) -> Option<SysEx> {
         (0x00, 0x00, 0x7e) => Some(SysEx::XgOn),
         (0x00, 0x00, 0x7f) => Some(SysEx::XgOn), // All Parameter Reset
         (0x00, 0x00, 0x04) => Some(SysEx::MasterVolume(value as f32 / 127.0)),
-        // Multi Part: Part Mode (0 normal, 1 drum, 2…5 drum setups).
-        (0x08, part @ 0x00..=0x0f, 0x07) => Some(SysEx::DrumPart { channel: part, drum: value != 0 }),
+        (0x00, 0x00, 0x06) => Some(SysEx::MasterKeyShift(key_shift(value))),
+        // Multi Part (part n plays channel n).
+        (0x08, channel @ 0x00..=0x0f, _) => {
+            let control = |controller| Some(SysEx::PartControl { channel, controller, value });
+            match low {
+                0x01 => control(0),
+                0x02 => control(32),
+                0x03 => Some(SysEx::PartProgram { channel, bank: None, program: value }),
+                // Part Mode: 0 normal, 1 drum, 2…5 drum setups.
+                0x07 => Some(SysEx::DrumPart { channel, drum: value != 0 }),
+                0x08 => Some(SysEx::PartKeyShift { channel, semitones: key_shift(value) }),
+                0x0b => control(7),
+                // 0 is random pan, played centered.
+                0x0e => {
+                    Some(SysEx::PartControl { channel, controller: 10, value: if value == 0 { 64 } else { value } })
+                }
+                0x12 => control(93),
+                0x13 => control(91),
+                _ => None,
+            }
+        }
         _ => None,
     }
 }

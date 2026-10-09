@@ -1,0 +1,14 @@
+# Memory-maps a SoundFont for sf2synth with no dependencies: the system's own
+# mmap (Unix) or file mapping (Windows), declared here.
+[package]
+name = "sf2synth-mmap"
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Memory-mapped files for sf2synth's SoundFont::from_shared, with no dependencies."
+license = "MIT OR Apache-2.0"
+authors = ["Albos Inc."]
+repository = "https://github.com/albos-inc/sf2synth"
+publish = false
+
+[dependencies]

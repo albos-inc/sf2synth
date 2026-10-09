@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.2.0 (2026-10-09)
+
+- GS and XG part parameters by SysEx: program (GS tone number, XG bank and
+  program), level, pan, reverb and chorus send, key shift; GS master
+  key-shift and XG transpose.
+- After a GS, XG or GM2 reset, every channel starts with a reverb send
+  (CC91) of 40, as on those sound modules (General MIDI still starts at 0).
+- MIDI files: SysEx messages continued in `F7` packets are joined, and
+  complete messages escaped in `F7` packets are read.
+- `sf2synth-mmap` (`mmap/`): memory-mapped files with no dependencies, now
+  on Windows too. `capi` uses it; the sample player memory-maps SF2 files.
+- Swift package: `Package.swift` moved to the repository's root, so it can
+  be added by URL; it downloads the Rust library attached to the release
+  unless one is built in `apple/`. `SF2SynthAudioUnit` gets parameters
+  (master gain, reverb, chorus; automatable), `fullState` (with the
+  SoundFont as a bookmark), declared channel capabilities and
+  security-scoped SoundFont URLs. `SF2SynthViewController` and
+  `SF2SynthView` make an Audio Unit extension; `examples/auv3` is an app
+  with one.
+- CI tests `mmap` and `capi` on Linux, macOS and Windows, and builds and
+  tests the Swift package and the AUv3 example.
+
 ## 0.1.1 (2026-10-09)
 
 - apple: MIDI events were lost when a host pulled the reverb send bus (1)

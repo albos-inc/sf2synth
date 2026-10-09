@@ -111,9 +111,9 @@ impl PlayerApp {
         let (tx, sample_rate) = (self.loaded_tx.clone(), self.sample_rate());
         self.loading += 1;
         std::thread::spawn(move || {
-            let result = std::fs::read(&path)
+            let result = std::fs::File::open(&path)
                 .map_err(|e| e.to_string())
-                .and_then(|bytes| LoadedSoundFont::new(bytes, &file_name(&path), sample_rate).map(Box::new));
+                .and_then(|file| LoadedSoundFont::open(&file, &file_name(&path), sample_rate).map(Box::new));
             let _ = tx.send(Loaded::SoundFont(path, result));
         });
     }

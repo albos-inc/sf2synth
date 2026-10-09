@@ -20,11 +20,13 @@ pub(crate) struct Channel {
     data_entry_is_rpn: bool,
     /// RPN 0, in semitones (MSB) plus cents (LSB) / 100.
     pub pitch_wheel_sensitivity: f32,
-    /// RPN 1 (fine tuning) plus RPN 2 (coarse tuning) plus the master
-    /// tuning, in cents.
+    /// RPN 1 (fine tuning) plus RPN 2 (coarse tuning) plus the key shifts
+    /// and the master tuning, in cents.
     pub tuning: f32,
-    /// Master Fine and Coarse Tuning (Universal SysEx), in cents.
+    /// Master tuning and key shift (SysEx), in cents.
     master_tuning: f32,
+    /// The part's key shift (GS / XG SysEx), in cents.
+    key_shift: f32,
     /// GS Scale Tuning: cents added to each pitch class (0 = C).
     pub scale_tuning: [f32; 12],
     fine_tuning: u16,
@@ -52,6 +54,7 @@ impl Channel {
             fine_tuning: 8192,
             coarse_tuning: 64,
             master_tuning: 0.0,
+            key_shift: 0.0,
             scale_tuning: [0.0; 12],
             version: 0,
         };
@@ -72,6 +75,7 @@ impl Channel {
         self.fine_tuning = 8192;
         self.coarse_tuning = 64;
         self.master_tuning = 0.0;
+        self.key_shift = 0.0;
         self.update_tuning();
         self.reset_controllers();
     }
@@ -168,12 +172,17 @@ impl Channel {
     fn update_tuning(&mut self) {
         let fine = (self.fine_tuning as f32 - 8192.0) / 8192.0 * 100.0;
         let coarse = (self.coarse_tuning as f32 - 64.0) * 100.0;
-        self.tuning = fine + coarse + self.master_tuning;
+        self.tuning = fine + coarse + self.key_shift + self.master_tuning;
         self.version = self.version.wrapping_add(1);
     }
 
     pub fn set_master_tuning(&mut self, cents: f32) {
         self.master_tuning = cents;
+        self.update_tuning();
+    }
+
+    pub fn set_key_shift(&mut self, semitones: i8) {
+        self.key_shift = semitones as f32 * 100.0;
         self.update_tuning();
     }
 

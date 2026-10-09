@@ -12,3 +12,4 @@ publish.workspace = true
 encoding_rs = "0.8"
 serde = { version = "1", features = ["derive"] }
 sf2synth = { path = "../../.." }
+sf2synth-mmap = { path = "../../../mmap" }

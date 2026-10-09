@@ -66,8 +66,9 @@ Sf2Font *sf2synth_font_load(const char *path, char **error);
 // from the file as it plays and costs no heap memory, however large the file.
 // The file must not change while mapped. Pages not yet read are read on
 // first use, possibly on the audio thread; the whole file is prefetched in
-// the background (madvise WILLNEED). Read like sf2synth_font_load where
-// mapping isn't available (Windows) and for DLS files (converted on loading).
+// the background. Mapped on Unix (macOS, iOS, Linux, Android) and Windows;
+// read like sf2synth_font_load where mapping isn't available. DLS files are
+// converted on loading, so their samples end up in memory anyway.
 Sf2Font *sf2synth_font_load_mapped(const char *path, char **error);
 // Parses an SF2 or DLS file held in memory (the bytes are copied).
 Sf2Font *sf2synth_font_load_memory(const uint8_t *bytes, size_t length, char **error);

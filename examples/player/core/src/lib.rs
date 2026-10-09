@@ -11,7 +11,7 @@
 use std::sync::Arc;
 
 use serde::Serialize;
-use sf2synth::{FileFormat, MidiFile, Sequencer, SoundFont, Synthesizer, SynthesizerSettings};
+use sf2synth::{FileFormat, MidiFile, Sequencer, SharedBytes, SoundFont, Synthesizer, SynthesizerSettings};
 
 /// Where the transport is.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
@@ -83,11 +83,24 @@ pub struct LoadedSoundFont {
 }
 
 impl LoadedSoundFont {
+    /// Memory-maps `file` (an SF2 or DLS file) and sets up a synthesizer for
+    /// it at `sample_rate`. A mapped SF2 costs no memory, however large; the
+    /// file can be closed afterwards.
+    pub fn open(file: &std::fs::File, file_name: &str, sample_rate: u32) -> Result<LoadedSoundFont, String> {
+        let bytes = sf2synth_mmap::map(file).map_err(|e| e.to_string())?;
+        Self::from_shared(bytes, file_name, sample_rate)
+    }
+
     /// Parses `bytes` (an SF2 or DLS file) and sets up a synthesizer for it
     /// at `sample_rate`.
     pub fn new(bytes: Vec<u8>, file_name: &str, sample_rate: u32) -> Result<LoadedSoundFont, String> {
-        let file_size = bytes.len() as u64;
-        let font = Arc::new(SoundFont::from_bytes(bytes).map_err(|e| e.to_string())?);
+        Self::from_shared(Arc::new(bytes), file_name, sample_rate)
+    }
+
+    /// [`new`](Self::new) for shared bytes (a memory map…).
+    pub fn from_shared(bytes: SharedBytes, file_name: &str, sample_rate: u32) -> Result<LoadedSoundFont, String> {
+        let file_size = (*bytes).as_ref().len() as u64;
+        let font = Arc::new(SoundFont::from_shared(bytes).map_err(|e| e.to_string())?);
         let info = font.info();
         let format = match info.format {
             FileFormat::Sf2 => format!("SF2 {}.{:02}", info.version.0, info.version.1),
