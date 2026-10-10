@@ -4,7 +4,7 @@
 #   cargo build --release --target aarch64-apple-ios
 [package]
 name = "sf2synth-capi"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2024"
 rust-version = "1.85"
 description = "A C interface to the sf2synth SF2 and SFZ synthesizer, with memory-mapped SoundFont loading."

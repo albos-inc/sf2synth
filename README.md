@@ -62,7 +62,7 @@ Android, Windows and macOS, with
 
 ```toml
 [dependencies]
-sf2synth = { git = "https://github.com/albos-inc/sf2synth", tag = "v0.4.0" }
+sf2synth = { git = "https://github.com/albos-inc/sf2synth", tag = "v0.4.1" }
 ```
 
 ```rust
@@ -241,7 +241,7 @@ Without another dependency, [`sf2synth-mmap`](mmap) maps a file with the
 system's own `mmap` (Unix) or file mapping (Windows):
 
 ```toml
-sf2synth-mmap = { git = "https://github.com/albos-inc/sf2synth", tag = "v0.4.0" }
+sf2synth-mmap = { git = "https://github.com/albos-inc/sf2synth", tag = "v0.4.1" }
 ```
 
 ```rust

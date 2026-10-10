@@ -22,8 +22,8 @@ let package = Package(
             ? .binaryTarget(name: "SF2SynthC", path: localFramework)
             : .binaryTarget(
                 name: "SF2SynthC",
-                url: "https://github.com/albos-inc/sf2synth/releases/download/v0.3.1/SF2SynthC.xcframework.zip",
-                checksum: "216e25cd405d2be388fdc3d7b624b21c3b2a051b0ce9f1e271fe194bff8b24d6"
+                url: "https://github.com/albos-inc/sf2synth/releases/download/v0.4.1/SF2SynthC.xcframework.zip",
+                checksum: "caba94c9876bf77472aa5eb8bf697f3c5d62ac2e2bbbff6f18fba1aa68a8dfbf"
             ),
         .target(name: "SF2Synth", dependencies: ["SF2SynthC"], path: "apple/Sources/SF2Synth"),
         // Needs a General MIDI SoundFont: SF2SYNTH_TEST_FONT=/path/to/font.sf2 swift test

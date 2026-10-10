@@ -1,6 +1,6 @@
 [package]
 name = "sf2synth"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2024"
 rust-version = "1.85"
 description = "A real-time SF2 and SFZ MIDI synthesizer and MIDI file sequencer in pure Rust, tuned for faithful piano reproduction."

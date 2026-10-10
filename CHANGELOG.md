@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.1 (2026-10-10)
+
+- Swift: the package's xcframework now has 0.4.x's synthesizer, so the
+  Audio Unit and `SF2SynthInstrument` open SFZ files too (0.4.0's package
+  still used 0.3.1's). The Rust library is unchanged.
+
 ## 0.4.0 (2026-10-09)
 
 SFZ and FLAC.
